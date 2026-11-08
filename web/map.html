@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en" class="calcite-mode-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Scripts come only from this origin and the ArcGIS CDN. An API key typed here stays in page memory, so keep that list short. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.arcgis.com; style-src 'self' 'unsafe-inline' https://js.arcgis.com; img-src 'self' data: blob: https:; font-src https://js.arcgis.com data:; worker-src blob: 'self' https://js.arcgis.com; connect-src 'self' blob: data: http://localhost:* http://127.0.0.1:* https://*.arcgisonline.com https://js.arcgis.com https://*.arcgis.com https://api.openai.com https://openrouter.ai; object-src 'none'; base-uri 'none'">
+<title>North Sea map</title>
+<link rel="stylesheet" href="https://js.arcgis.com/5.2/@arcgis/core/assets/esri/themes/dark/main.css">
+<style>
+  :root { color-scheme: dark; --bg: #14181a; --panel: #1c2225; --fg: #e6e9ea; --muted: #98a3a8; --line: #2d363a; --accent: #4fc1cf; --step: #262e31; --error: #ff9a8f; --busy: #f2b84b; --ok: #6fcf97; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+  body { display: grid; grid-template-columns: 440px minmax(0, 1fr); grid-template-rows: minmax(0, 100%); height: 100dvh; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  aside { display: flex; flex-direction: column; gap: 12px; padding: 16px; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; border-right: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 20px; font-weight: 500; }
+  p { margin: 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  details { font-size: 13px; }
+  summary { cursor: pointer; color: var(--muted); }
+  details label { display: grid; gap: 2px; margin-top: 8px; color: var(--muted); }
+  input, button { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--fg); min-width: 0; }
+  button { cursor: pointer; transition: background-color .12s, border-color .12s, color .12s, transform .12s; }
+  button:not(:disabled):hover { background: var(--step); }
+  button:not(:disabled):active { transform: scale(.98); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+  button.primary:not(:disabled):hover { background: #fff; border-color: #fff; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .message { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .message.user { align-self: flex-end; max-width: 90%; background: #242c2f; }
+  .message.error { color: var(--error); }
+  form { display: flex; gap: 8px; }
+  #prompt { flex: 1; }
+  #result { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  #result[hidden] { display: none; }
+  #layerlist { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+  .layer { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .layer input { flex: none; padding: 0; margin: 0; accent-color: var(--accent); }
+  .swatch { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .lname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lmeta { flex: none; color: var(--muted); font: 12px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  a.lmeta { text-decoration: underline; }
+  a.lmeta:hover { color: var(--fg); }
+  #summary { font-variant-numeric: tabular-nums; }
+  .formatbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+  .formats { display: flex; gap: 0; }
+  .formats button { border-radius: 0; }
+  .formats button:first-child { border-radius: 4px 0 0 4px; }
+  .formats button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+  .formats button[aria-pressed="true"] { background: var(--step); border-bottom: 2px solid var(--accent); }
+  .live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-width: 0; }
+  #phase { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  #clock { font: 12px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .live[data-state="busy"] .dot { background: var(--busy); animation: pulse 1.2s ease-in-out infinite; }
+  .live[data-state="ok"] .dot { background: var(--ok); }
+  .live[data-state="error"] .dot { background: var(--error); }
+  .trace-toggle { margin-left: auto; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .trace-toggle input { padding: 0; margin: 0; accent-color: var(--accent); }
+  .bar { position: relative; height: 2px; margin-top: -4px; overflow: hidden; border-radius: 1px; background: var(--line); }
+  .bar i { position: absolute; inset: 0 auto 0 0; width: 35%; background: var(--accent); border-radius: 1px; opacity: 0; }
+  .live[data-state="busy"] + .bar i { opacity: 1; animation: sweep 1.3s cubic-bezier(.4, 0, .2, 1) infinite; }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .turn { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); font: 12px ui-monospace, monospace; color: var(--muted); }
+  .turn span:last-child { font-variant-numeric: tabular-nums; }
+  .step { border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+  .step > summary { display: flex; align-items: center; gap: 8px; padding: 4px 8px; list-style: none; cursor: pointer; color: var(--fg); min-width: 0; }
+  .step > summary::-webkit-details-marker { display: none; }
+  .step > summary { transition: background-color .12s; }
+  .step > summary:hover { background: #20282b; border-radius: 7px; }
+  .step .dot { background: var(--ok); }
+  .step.running .dot { background: var(--busy); animation: pulse 1.2s ease-in-out infinite; }
+  .step.failed .dot { background: var(--error); }
+  .step .sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .step .meta { flex: none; font: 12px ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .step .body { display: grid; gap: 4px; padding: 0 8px 8px; }
+  .step .k { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .step pre { margin: 0; padding: 8px; max-height: 240px; overflow: auto; border-radius: 4px; background: var(--bg); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #messages.notrace .step, #messages.notrace .turn { display: none; }
+  @media (prefers-reduced-motion: reduce) { .dot, .bar i, .step .dot { animation: none !important; } button, .step > summary { transition: none; } button:active { transform: none !important; } }
+  #map { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+  @media (max-height: 640px) { header p { display: none; } }
+  @media (max-width: 800px) {
+    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40fr) minmax(0, 60fr); }
+    #map { order: -1; }
+    aside { border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>North Sea map</h1>
+    <p class="muted">Ask about wells, pipelines or discoveries. The answer is drawn on the map.</p>
+  </header>
+  <details>
+    <summary>Connection</summary>
+    <label>Model <input id="model" value="azure/gpt-5.5-2026-04-24" autocomplete="off"></label>
+    <label>API base or proxy URL <input id="base" value="http://localhost:8787" autocomplete="off"></label>
+    <label>API key (memory only; leave empty for the proxy) <input id="key" type="password" autocomplete="off"></label>
+    <button id="connect" type="button" style="margin-top:8px">Connect</button>
+  </details>
+  <div id="live" class="live" data-state="busy" role="status"><span class="dot"></span><span id="phase">Connecting…</span><span id="clock"></span>
+    <label class="trace-toggle"><input type="checkbox" id="trace" checked>Trace</label></div>
+  <div class="bar" role="progressbar" aria-label="Agent activity" aria-busy="true"><i></i></div>
+  <div id="messages"></div>
+  <section id="result" hidden aria-label="Result on the map">
+    <p id="summary"></p>
+    <ul id="layerlist"></ul>
+  </section>
+  <div class="formatbar"><span id="format-label">Map file for the next question</span>
+    <div class="formats" role="group" aria-labelledby="format-label">
+      <button type="button" data-format="geojson" aria-pressed="true">GeoJSON</button>
+      <button type="button" data-format="parquet" aria-pressed="false">GeoParquet</button>
+    </div>
+  </div>
+  <form id="chat">
+    <input id="prompt" aria-label="Question" autocomplete="off" placeholder="Show the 20 wells with the greatest water depth" autofocus>
+    <button id="send" class="primary" disabled>Send</button>
+    <button id="stop" type="button" disabled>Stop</button>
+    <button id="clear" type="button">Clear</button>
+  </form>
+</aside>
+<div id="map" aria-label="Map"></div>
+<script type="module" src="./map.js"></script>
+</body>
+</html>

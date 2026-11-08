@@ -1,0 +1,47 @@
+[package]
+name = "gait-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait.workspace = true
+console_error_panic_hook = "0.1"
+gait-core = { path = "../gait-core" }
+js-sys = "0.3"
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
+    "Headers",
+    "Request",
+    "RequestInit",
+    "RequestRedirect",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "Response",
+    "Url",
+    "console",
+] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# These are the Wasm features rustc emits or this crate enables. wasm-opt rejects them unless listed.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-bulk-memory-opt",
+    "--enable-mutable-globals",
+    "--enable-nontrapping-float-to-int",
+    "--enable-reference-types",
+    "--enable-sign-ext",
+    "--enable-simd",
+]

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- An API key is in this page's memory, so a page script could send it anywhere. Limit where it can go. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; connect-src 'self' http://localhost:* http://127.0.0.1:* https://api.openai.com https://openrouter.ai">
+<title>gen-ai-rs</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1a1a1a; --muted: #5f6368; --line: #d9dce0; --panel: #f5f6f7; --accent: #0b57d0; --error: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181a; --fg: #e8eaed; --muted: #a0a4a8; --line: #33373b; --panel: #1f2225; --accent: #8ab4f8; --error: #f2b8b5; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: auto; display: grid; gap: 16px; }
+  h1 { margin: 0; font-size: 20px; }
+  h2 { margin: 0 0 8px; font-size: 14px; }
+  label { display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
+  input, select, button { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; align-items: end; }
+  .check { display: flex; gap: 6px; align-items: center; }
+  .remote { display: none; }
+  body:not([data-mode="mock"]) .remote { display: grid; }
+  body:not([data-mode="mock"]) .check.remote { display: flex; }
+  #status { min-height: 1.4em; margin: 0; color: var(--muted); font-size: 13px; }
+  .panes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  section { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+  #messages { height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  .message { padding: 8px 10px; border-radius: 8px; background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .message.user { align-self: flex-end; max-width: 85%; }
+  .message.error { color: var(--error); }
+  #chat { display: flex; gap: 8px; }
+  #prompt { flex: 1; }
+  .trace-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .trace-head h2 { margin: 0; }
+  .trace-box { height: 340px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font: 12px ui-monospace, monospace; }
+  td { padding: 2px 6px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  td:nth-child(-n+2) { white-space: nowrap; color: var(--muted); }
+</style>
+</head>
+<body data-mode="mock">
+<main>
+  <h1>Minimal browser agent in Rust and WebAssembly</h1>
+  <div class="settings">
+    <label>Provider
+      <select id="mode">
+        <option value="mock">Mock (scripted, no key)</option>
+        <option value="ollama">Local Ollama</option>
+        <option value="azure">Azure OpenAI (needs dev_proxy.py)</option>
+        <option value="openai">OpenAI-compatible</option>
+      </select>
+    </label>
+    <label>Model <input id="model" autocomplete="off"></label>
+    <label class="remote">API key (kept in memory only)
+      <input id="key" type="password" autocomplete="off">
+    </label>
+    <label class="remote">API base or proxy URL <input id="base" autocomplete="off" placeholder="Provider default"></label>
+    <button id="connect" type="button" class="remote">Connect</button>
+  </div>
+  <p id="status" role="status"></p>
+  <div class="panes">
+    <section aria-label="Chat">
+      <div id="messages" aria-live="polite"></div>
+      <form id="chat">
+        <input id="prompt" aria-label="Message" autocomplete="off" placeholder="Multiply 6 by 7. Convert 5 miles to km." autofocus>
+        <button id="send" class="primary" disabled>Send</button>
+        <button id="stop" type="button" disabled>Stop</button>
+      </form>
+    </section>
+    <section aria-label="Trace">
+      <div class="trace-head">
+        <h2>Trace</h2>
+        <span>
+          <button id="export" type="button">Export JSONL</button>
+          <button id="clear" type="button">Clear session</button>
+        </span>
+      </div>
+      <div class="trace-box"><table><tbody id="trace"></tbody></table></div>
+    </section>
+  </div>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

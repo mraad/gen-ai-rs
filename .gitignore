@@ -1,0 +1,6 @@
+target/
+pkg/
+web/pkg/
+web/kb/
+__pycache__/
+.DS_Store

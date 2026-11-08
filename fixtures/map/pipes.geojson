@@ -1,0 +1,1 @@
+{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[2.0, 58.0], [3.0, 59.0], [4.0, 60.0]]}, "properties": {"OBJECTID": 1, "NAME": "STATPIPE"}, "id": 1}]}
