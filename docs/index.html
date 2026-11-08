@@ -937,7 +937,7 @@ Server routes:
   <p>The browser page cannot hold that token. The page sends only same-origin cookies. Thus, a gateway, <code>tools/gateway.py</code>, sits between the page and <code>mcp-rwee</code>. The gateway holds the token. The token never goes to the browser.</p>
   <p>The map page, <code>web/map.html</code>, runs the same WASM agent as the demo page. It shows the result of a query on a map from the ArcGIS Maps SDK for JavaScript 5.2. <a href="#ref-arcgis-sdk">[ARCGIS-SDK]</a></p>
   <figure>
-    <a href="images/gateway.svg"><img src="images/gateway.svg" width="600" height="360" loading="lazy" alt="The map page and the WASM agent call the gateway on the same origin. The gateway checks arguments, adds the token, shapes results and relays map files from mcp-rwee. Model requests go to the model proxy."></a>
+    <a href="images/gateway.svg"><img src="images/gateway.svg" width="600" height="360" loading="lazy" alt="The map page and the WASM agent call the gateway on the same origin. The gateway checks arguments, adds the token and relays tool calls and map files from mcp-rwee. Model requests go to the model proxy."></a>
     <figcaption><strong>Figure 10.</strong> The gateway is the only part that holds the <code>mcp-rwee</code> token. The model proxy is the only part that holds the model key.</figcaption>
   </figure>
 
@@ -1058,6 +1058,10 @@ Server routes:
     <li>To hide a layer, clear its box in the layer list.</li>
     <li>To start a new conversation, press <strong>Clear</strong>. The page removes the saved conversation, every added map layer and any open popup. The basemap stays.</li>
   </ol>
+  <figure>
+    <a href="images/map-zscore.png"><img src="images/map-zscore.png" width="720" height="450" loading="lazy" alt="The map page after the question: show all the wells with depth greater than 350 m and color-code them by the z-score of their depth. The trace panel shows 4 model calls and 12,480 tokens. The map shows 600 wells, colored from blue to orange."></a>
+    <figcaption><strong>Figure 12.</strong> A live run on 8 November 2026 with an Azure model and <code>mcp-rwee</code>. The result has a numeric <code>color</code> column (the z-score), so the wells go from blue to orange.</figcaption>
+  </figure>
   <p>The conversation survives a page reload (section 11.4). The layers do not.</p>
   <p>A link with <code>?q=...</code> fills the question box. It does not send the question. You press Send.</p>
   <p>A question that relates two tables, for example wells near a pipeline, gives two layers. Each layer has its own color. The page draws polygons first, then lines, then points. The map zooms to the extent of all layers.</p>
@@ -1246,7 +1250,7 @@ Server routes:
   <p>The browser suite starts an isolated Chrome profile. It serves local MCP and model fixtures. It does not spend tokens on a live provider.</p>
   <figure>
     <a href="images/e2e-map.svg"><img src="images/e2e-map.svg" width="600" height="310" loading="lazy" alt="tools/e2e.py opens map.html in isolated Chrome through the real gateway. A fake mcp-rwee serves fixture files and a fake model on another origin asks for two layers. The ArcGIS SDK loads from the network."></a>
-    <figcaption><strong>Figure 12.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
+    <figcaption><strong>Figure 13.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
   </figure>
   <p>The suite also opens <code>map.html</code> through the real gateway (<code>tools/gateway.py</code>). A fake mcp-rwee server answers <code>write</code> and <code>execute</code>, and serves the files in <code>fixtures/map</code> with <code>HEAD</code> and <code>Range</code>. <code>tools/northsea.py</code> wrote these files: 2 wells and 1 pipeline, in each format. A fake model on a second origin asks for the two layers and then answers. For GeoParquet and then GeoJSON, the suite checks that the server receives only that format, that the map draws both layers from those files, and that the switch does not redraw the current result. This part needs the network, because the page loads the ArcGIS Maps SDK and the basemap.</p>
   <div class="caution"><p><strong>Caution:</strong> Without a network connection, the map checks fail and the suite exits with an error.</p></div>
@@ -1269,15 +1273,15 @@ Server routes:
   <div class="table-wrap"><table>
     <caption>Recorded artifact and source reduction</caption>
     <thead><tr><th scope="col">Measure</th><th scope="col">Before reduction</th><th scope="col">After reduction</th></tr></thead><tbody>
-      <tr><td>Rust source lines under <code>src/</code></td><td>4,705</td><td>2,841</td></tr>
-      <tr><td>WASM bytes, raw</td><td>402,568</td><td>328,129</td></tr>
-      <tr><td>WASM bytes, gzip</td><td>171,207</td><td>139,144</td></tr>
+      <tr><td>Rust source lines under <code>src/</code></td><td>4,705</td><td>2,217</td></tr>
+      <tr><td>WASM bytes, raw</td><td>402,568</td><td>272,918</td></tr>
+      <tr><td>WASM bytes, gzip</td><td>171,207</td><td>118,255</td></tr>
     </tbody>
   </table></div>
   <p>The source count includes the core, adapters, binding, and small inline tests. It excludes separate test files.</p>
-  <p>The generated JavaScript adds 6,220 gzip bytes. The gzip WASM file is approximately 136 KiB. One KiB is 1,024 bytes.</p>
-  <p>The recorded environment was Apple Silicon and Chrome 153 on localhost. The model was scripted. The MCP server was a local fixture.</p>
-  <p>WASM initialization measured 3.2 ms cold and 1.8 ms warm median. The warm MCP round trip measured 0.75 ms median over 20 calls.</p>
+  <p>The generated JavaScript adds 6,128 gzip bytes. The gzip WASM file is approximately 115 KiB. One KiB is 1,024 bytes.</p>
+  <p>The current values were measured on 8 November 2026, after the minimal pass. The environment was Apple Silicon and Chrome 153 on localhost. The model was scripted. The MCP server was a local fixture.</p>
+  <p>WASM initialization measured 3.9 ms cold and 1.8 ms warm median. The warm MCP round trip measured 0.70 ms median over 20 calls.</p>
   <p>Those timings exclude model latency and real-network cost. They are not a deployment service-level guarantee.</p>
   <p>The source reduction removed APIs and features. It is not an equal-feature performance comparison.</p>
   <h3>20.7 Release profile</h3>

@@ -90,6 +90,10 @@ The skill `northsea-duckdb` carries the SQL rules. `northsea_layers` with no tab
 
 **Map page.** Open `http://localhost:8080/map.html` (use `localhost`, which the Azure proxy allows). It runs the same WASM agent (`pkg/gait_wasm.js`) beside an ArcGIS Maps SDK for JavaScript 5.2 map. Ask for features ("Show the 25 wells with the greatest water depth"); the page reads the file URLs from the `northsea_query` result and draws them with `GeoJSONLayer`, or with `ParquetLayer` when GeoParquet was selected. The GeoJSON and GeoParquet switch above the question box applies to the next question, because only that one file is written. `?q=...` fills the question box; you press Send. The left panel shows the agent at work: a progress bar and a live status line, then one row per model call (messages sent, reply, that call's tokens) and per tool call (arguments, result, time) under each turn, with totals on the turn header; the Trace box hides the rows. The page is dark, with Esri's Dark Gray Canvas basemap, a keyless tile service (CARTO dark tiles now need a key). The gateway has no user authentication. Details: `docs/index.html`, sections 16 (gateway and map page) and 17 (token cost).
 
+![The map page after "Show all the wells with depth > 350 m and color-code them by the z-score value of their depth": 600 wells from blue to orange, 4 model calls, 12,480 tokens](docs/images/map-zscore.png)
+
+Live run, 2026-11-08, Azure model and mcp-rwee on `NorthSea.ddb`.
+
 ## Host API
 
 ```js
@@ -188,15 +192,15 @@ These are implementation choices informed by those sources, not a claim that bro
 
 ## Measured build
 
-2026-11-07, Apple Silicon, Chrome 153, localhost, scripted model and local MCP fixture:
+2026-11-08, after the minimal pass, Apple Silicon, Chrome 153, localhost, scripted model and local MCP fixture:
 
 | Measure | Before this reduction | Current |
 |---|---:|---:|
-| Rust lines under `src/` | 4,705 | 2,841 |
-| WASM bytes, raw | 402,568 | 328,129 |
-| WASM bytes, gzip | 171,207 | 139,144 |
+| Rust lines under `src/` | 4,705 | 2,217 |
+| WASM bytes, raw | 402,568 | 272,918 |
+| WASM bytes, gzip | 171,207 | 118,255 |
 
-Current glue adds 6,220 bytes gzip. WASM initialization measured 3.2 ms cold and 1.8 ms warm median. A warm local MCP tool round trip measured 0.75 ms median over 20 calls. These exclude model latency and real-network cost. Source counts include the core, adapters, browser binding, and small inline tests; separate test files are excluded. Source and bundle changes intentionally remove APIs; the smaller artifact is not a performance comparison with equivalent feature sets.
+Current glue adds 6,128 bytes gzip. WASM initialization measured 3.9 ms cold and 1.8 ms warm median. A warm local MCP tool round trip measured 0.70 ms median over 20 calls. These exclude model latency and real-network cost. Source counts include the core, adapters, browser binding, and small inline tests; separate test files are excluded. Source and bundle changes intentionally remove APIs; the smaller artifact is not a performance comparison with equivalent feature sets.
 
 ## License
 
