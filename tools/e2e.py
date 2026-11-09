@@ -533,7 +533,7 @@ def test_page_stop_and_recovery(browser, origin):
 
 
 # ---- map page: the real gateway in front of a fake mcp-rwee, and a fake model on another origin.
-MAP_FIXTURES = WEB.parent / "fixtures" / "map"  # written by tools/northsea.py: 2 wells, 1 pipeline, in both formats
+MAP_FIXTURES = WEB.parent / "fixtures" / "map"  # local test data, not in git: tools/narrow.py output, 2 points and 1 line, in both formats
 MAP_RUN = "c" * 32
 MAP_TOKEN = "e2e-map-token-" + "x" * 32
 MAP_QUESTION = "Show deep wells near pipelines"
@@ -598,7 +598,7 @@ class FakeRwee(BaseHTTPRequestHandler):
 
 
 class FakeMapModel(BaseHTTPRequestHandler):
-    """An OpenAI-compatible model: asks for two layers with northsea_query, then answers."""
+    """An OpenAI-compatible model: asks for two layers with demo_query, then answers."""
     def log_message(self, *args):
         pass
 
@@ -620,7 +620,7 @@ class FakeMapModel(BaseHTTPRequestHandler):
         else:
             args = {"queries": [{"name": "wells", "sql": "SELECT * FROM Wells"}, {"name": "pipes", "sql": "SELECT * FROM Pipes"}]}
             events = [{"choices": [{"delta": {"role": "assistant", "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
-                                                                                   "function": {"name": "northsea_query", "arguments": json.dumps(args)}}]}}]},
+                                                                                   "function": {"name": "demo_query", "arguments": json.dumps(args)}}]}}]},
                       {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}]
         data = "".join(f"data: {json.dumps(e)}\n\n" for e in events) + "data: [DONE]\n\n"
         self.send_response(200)
@@ -644,9 +644,11 @@ MAP_STATE = """done({
 def test_map(browser):
     """map.html needs the network: it loads the ArcGIS Maps SDK and the basemap tiles."""
     upstream, model = serve(FakeRwee), serve(FakeMapModel)
-    cfg = {"mode": "narrow", "database": "/db/NorthSea.ddb", "layers": "/db/Layers.json", "timeout": 10}
+    cfg = {"mode": "narrow", "database": "/db/demo.duckdb", "layers": "/db/Layers.json", "timeout": 10,
+           "name": "demo", "about": "demo dataset", "skill": "demo-sql"}
+    page = {"title": "Test map", "placeholder": "Show the wells", "center": [3, 58], "zoom": 5}
     up = gateway.Upstream(f"http://127.0.0.1:{upstream.server_address[1]}", MAP_TOKEN, 10)
-    gw = serve(partial(gateway.Handler, directory=str(WEB), upstream=up, cfg=cfg))
+    gw = serve(partial(gateway.Handler, directory=str(WEB), upstream=up, cfg=cfg, page=page))
     try:
         browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.__errors = []; addEventListener('error', (e) => __errors.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errors.push(String(e.reason)));"})
         browser.goto(f"http://localhost:{gw.server_address[1]}/map.html")
@@ -658,6 +660,9 @@ def test_map(browser):
             return state
         state = wait(lambda s: s["phase"] in ("Ready",) or s["phase"].startswith("Could not"), 60)
         check("map: page loads the ArcGIS SDK and the WASM agent", state["phase"] == "Ready", state)
+        shown = browser.run("""done([document.title, document.getElementById("title").textContent, document.getElementById("prompt").placeholder,
+          Math.round(gaitMap.center.longitude), Math.round(gaitMap.center.latitude), gaitMap.zoom])""")
+        check("map: title, placeholder and view come from the gateway's map.json", shown == ["Test map", "Test map", "Show the wells", 3, 58, 5], shown)
         browser.run(f"""document.getElementById("model").value = "openai/test";
           document.getElementById("base").value = "http://localhost:{model.server_address[1]}";
           document.getElementById("connect").click(); done()""")
@@ -695,10 +700,11 @@ def test_map(browser):
           document.getElementById("chat").requestSubmit(); done()""")
         drawn = wait(lambda s: s["drawn"] == "geojson" and s["phase"] == "Ready" or s["phase"] == "Stopped", 60)
         before = browser.run("done(gaitMap.map.layers.length)")
+        check("map: the conversation is saved under the dataset's key", browser.run('done(localStorage.getItem("gait-map-state:Test map") !== null)'))
         browser.run('document.getElementById("clear").click(); done()')
         state = wait(lambda s: s["phase"] == "Cleared", 10)
         gone = browser.run("""done({layers: gaitMap.map.layers.length, basemap: gaitMap.map.basemap.baseLayers.length + gaitMap.map.basemap.referenceLayers.length,
-          messages: document.querySelectorAll(".message").length, listed: document.querySelectorAll(".layer").length, saved: localStorage.getItem("gait-map-state")})""")
+          messages: document.querySelectorAll(".message").length, listed: document.querySelectorAll(".layer").length, saved: localStorage.getItem("gait-map-state:Test map")})""")
         check("map: Clear removes every added layer and keeps the basemap", before == 2 and gone["layers"] == 0 and gone["basemap"] == 2 and gone["listed"] == 0, (drawn, before, gone))
         check("map: Clear removes the conversation and the saved copy", gone["messages"] == 0 and gone["saved"] is None, (gone, state))
     finally:
@@ -744,7 +750,10 @@ def main():
             test_page(browser, origin)
             test_trace_redaction(browser)
             test_page_stop_and_recovery(browser, origin)
-            test_map(browser)
+            if (MAP_FIXTURES / "layers.json").is_file():
+                test_map(browser)
+            else:
+                print(f"SKIP  map: no local test data in {MAP_FIXTURES}")
     finally:
         browser.close()
         if server:

@@ -1,4 +1,4 @@
-// Chat with the WASM agent; draw the one GeoJSON or GeoParquet file that a northsea_query call writes for each layer.
+// Chat with the WASM agent; draw the one GeoJSON or GeoParquet file that a narrow query tool call writes for each layer.
 import init, { GaitSession } from "./pkg/gait_wasm.js";
 
 const SDK = "https://js.arcgis.com/5.2/@arcgis/core";
@@ -10,6 +10,11 @@ esriConfig.assetsPath = `${SDK}/assets`;
 await import("https://js.arcgis.com/calcite-components/5.2.0/index.js"); // registers the Calcite widgets that the zoom buttons and the popup use
 
 const $ = (id) => document.getElementById(id);
+// The gateway serves the dataset's page settings from its config; without them the page stays generic.
+const page = await fetch("map.json").then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+if (page.title) document.title = $("title").textContent = page.title;
+if (page.intro) $("intro").textContent = page.intro;
+if (page.placeholder) $("prompt").placeholder = page.placeholder;
 const COLORS = ["#fb923c", "#60a5fa", "#a78bfa", "#34d399", "#f472b6", "#facc15"]; // one per layer, in the order the query lists them
 const rgba = (hex, a) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).concat(a);
 const symbol = (type, color) => type === "polyline" ? { type: "simple-line", color, width: 2 }
@@ -28,7 +33,7 @@ const DRAW_ORDER ={ polygon: 0, polyline: 1, point: 2 }; // points on top
 // Esri's dark gray canvas is a keyless tile service; its labels go above the data. Swap in an Esri basemap style if you have a key.
 const SERVICE = "https://server.arcgisonline.com/arcgis/rest/services/Canvas";
 const view = new MapView({
-  container: "map", center: [3, 58], zoom: 5, background: { color: "#14181a" },
+  container: "map", center: page.center ?? [0, 20], zoom: page.zoom ?? 2, background: { color: "#14181a" },
   map: new Map({ basemap: {
     baseLayers: [new TileLayer({ url: `${SERVICE}/World_Dark_Gray_Base/MapServer` })],
     referenceLayers: [new TileLayer({ url: `${SERVICE}/World_Dark_Gray_Reference/MapServer` })],
@@ -229,7 +234,7 @@ function onEvent(e) {
 }
 
 // ---- chat. The conversation survives a reload: the page saves state() after each turn and gives it back to create().
-const SAVED = "gait-map-state";
+const SAVED = page.title ? `gait-map-state:${page.title}` : "gait-map-state"; // one conversation per dataset
 function saved() { try { return JSON.parse(localStorage.getItem(SAVED)); } catch { return null; } }
 function save() { try { localStorage.setItem(SAVED, JSON.stringify(session.state())); return ""; } catch (error) { return error.message; } }
 function message(role, text) {

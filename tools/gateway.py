@@ -6,13 +6,18 @@ The page cannot send a Bearer token, so the gateway serves web/, holds the token
 of it before you expose it. The registration in the config file sets how much of the upstream
 the model sees:
 
-  narrow       tools northsea_layers and northsea_query only. The model writes read-only SQL; the
-               fixed script tools/northsea.py runs it on the upstream with locked-down DuckDB.
+  narrow       tools NAME_layers and NAME_query only. The model writes read-only SQL; the
+               fixed script tools/narrow.py runs it on the upstream with locked-down DuckDB.
   passthrough  every upstream tool unchanged, including write and execute (arbitrary code).
 
-Config (JSON), the token comes from the environment, never from the file:
-  {"port": 8080, "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN",
-   "mode": "narrow", "database": "/path/NorthSea.ddb", "layers": "/path/Layers.json", "timeout": 120}}
+Config (JSON), the token comes from the environment, never from the file. One file per dataset:
+  {"port": 8080, "kb": "/local/exported/kb",
+   "map": {"title": "Roads map", "intro": "...", "placeholder": "...", "center": [-97.7, 30.3], "zoom": 10},
+   "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN", "mode": "narrow",
+           "database": "/path/roads.duckdb", "layers": "/path/Layers.json", "timeout": 120,
+           "name": "roads", "about": "road network", "skill": "roads-sql"}}
+database and layers are paths on the upstream host. kb (an export_kb.py folder, served at /kb/) and
+map (served as /map.json for the map page) are optional; a relative kb is relative to the config file; without them the page uses web/kb and its defaults.
 """
 import argparse
 import json
@@ -26,10 +31,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from northsea import FORMATS, MAX_QUERIES, NAME  # one definition for the gateway and the script
+from narrow import FORMATS, MAX_QUERIES, NAME  # one definition for the gateway and the script
 
 WEB = Path(__file__).resolve().parents[1] / "web"
-SCRIPT = Path(__file__).with_name("northsea.py")
+SCRIPT = Path(__file__).with_name("narrow.py")
 PROTOCOL = "2026-07-28"
 MAX_BODY = 1 << 20
 MAX_REPLY = 16 << 20
@@ -37,17 +42,22 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 SQL_LIMIT = 20_000
 ARTIFACT = re.compile(r"^/artifacts/([0-9a-f]{32})/([\w.-]+(?:/[\w.-]+)*)$")
 
-NARROW_TOOLS = [
-    {"name": "northsea_layers", "description": "With no table: a compact card for every North Sea table (geometry type, display column, and each column with its type, unit, rules and example values). With a table: its full metadata. Read the cards once before you write SQL. Rules: skill northsea-duckdb.",
-     "inputSchema": {"type": "object", "properties": {"table": {"type": "string", "description": "Table name. Leave out to list all tables."}}, "additionalProperties": False}},
-    {"name": "northsea_query", "description": "Run read-only DuckDB SELECTs (spatial extension loaded, WGS84 degrees, axis order x=longitude). Give one `sql`, or `queries` for several named layers, for example wells and pipelines on one map. A result with no GEOMETRY column returns up to 200 rows (50 per query with `queries`). A result with a GEOMETRY column returns row_count, stats and 10 sample rows, and its full data is one file at the returned url, GeoJSON or GeoParquet as the map page asks, which the map draws. Rules: skill northsea-duckdb.",
-     "inputSchema": {"type": "object", "properties": {
-         "sql": {"type": "string", "maxLength": SQL_LIMIT},
-         "queries": {"type": "array", "minItems": 1, "maxItems": MAX_QUERIES, "items": {"type": "object", "properties": {
-             "name": {"type": "string", "pattern": NAME.pattern, "description": "Layer name, for example wells_deep"},
-             "sql": {"type": "string", "maxLength": SQL_LIMIT}}, "required": ["name", "sql"], "additionalProperties": False}}},
-         "additionalProperties": False}},
-]
+
+
+def narrow_tools(cfg):
+    """The two narrow tools. Their names and text come from the config, so one gateway serves any DuckDB dataset."""
+    name, about, skill = cfg["name"], cfg["about"], cfg["skill"]
+    return [
+        {"name": f"{name}_layers", "description": f"With no table: a compact card for every {about} table (geometry type, display column, and each column with its type, unit, rules and example values). With a table: its full metadata. Read the cards once before you write SQL. Rules: skill {skill}.",
+         "inputSchema": {"type": "object", "properties": {"table": {"type": "string", "description": "Table name. Leave out to list all tables."}}, "additionalProperties": False}},
+        {"name": f"{name}_query", "description": f"Run read-only DuckDB SELECTs on the {about} tables (spatial extension loaded, WGS84 degrees, axis order x=longitude). Give one `sql`, or `queries` for several named layers on one map. A result with no GEOMETRY column returns up to 200 rows (50 per query with `queries`). A result with a GEOMETRY column returns row_count, stats and 10 sample rows, and its full data is one file at the returned url, GeoJSON or GeoParquet as the map page asks, which the map draws. Rules: skill {skill}.",
+         "inputSchema": {"type": "object", "properties": {
+             "sql": {"type": "string", "maxLength": SQL_LIMIT},
+             "queries": {"type": "array", "minItems": 1, "maxItems": MAX_QUERIES, "items": {"type": "object", "properties": {
+                 "name": {"type": "string", "pattern": NAME.pattern, "description": "Layer name: lowercase letters, digits and underscores"},
+                 "sql": {"type": "string", "maxLength": SQL_LIMIT}}, "required": ["name", "sql"], "additionalProperties": False}}},
+             "additionalProperties": False}},
+    ]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -117,7 +127,7 @@ def text_result(text, error=False):
 
 def narrow_call(up, cfg, name, args, fmt="geojson"):
     """Run a fixed script upstream. Arguments are validated here; the model never chooses a path."""
-    if name == "northsea_layers":
+    if name == f"{cfg['name']}_layers":
         if set(args) - {"table"} or not isinstance(args.get("table", ""), str):
             raise ValueError("only an optional string table is allowed")
         script_args = ["layers", cfg["layers"], *([args["table"]] if args.get("table") else [])]
@@ -130,7 +140,7 @@ def narrow_call(up, cfg, name, args, fmt="geojson"):
             ok = isinstance(q, dict) and set(q) == {"name", "sql"} and isinstance(q["name"], str) and NAME.match(q["name"]) \
                 and isinstance(q["sql"], str) and q["sql"].strip() and len(q["sql"]) <= SQL_LIMIT
             if not ok:
-                raise ValueError(f"each query needs a name like wells_deep and a non-empty sql of at most {SQL_LIMIT} characters")
+                raise ValueError(f"each query needs a lowercase name such as layer_1 and a non-empty sql of at most {SQL_LIMIT} characters")
             names.append(q["name"])
         if len(set(names)) != len(names):
             raise ValueError("query names must be unique")
@@ -146,9 +156,15 @@ def narrow_call(up, cfg, name, args, fmt="geojson"):
 
 
 class Handler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, upstream, cfg, **kwargs):
-        self.upstream, self.cfg = upstream, cfg
+    def __init__(self, *args, upstream, cfg, kb=None, page=None, **kwargs):
+        self.upstream, self.cfg, self.kb, self.page = upstream, cfg, kb, page
         super().__init__(*args, **kwargs)
+
+    def translate_path(self, path):
+        """/kb/... comes from the configured kb folder; the parent class drops '..' and absolute parts."""
+        if self.kb and path.startswith("/kb/"):
+            return str(Path(self.kb) / Path(super().translate_path(path[3:])).relative_to(self.directory))
+        return super().translate_path(path)
 
     def reply(self, status, ctype, data, extra=(), head=False):
         self.send_response(status)
@@ -172,6 +188,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.do_GET(head=True)
 
     def do_GET(self, head=False):
+        if self.page is not None and urlsplit(self.path).path == "/map.json":
+            return self.reply(200, "application/json", json.dumps(self.page).encode(), head=head)
         match = ARTIFACT.match(self.path)
         if not match or ".." in match.group(2).split("/"):
             return super().do_HEAD() if head else super().do_GET()
@@ -222,9 +240,10 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError(f"MCP {PROTOCOL} headers are required")
             if self.cfg["mode"] == "passthrough":
                 return self.relay(raw, method)
+            tools = narrow_tools(self.cfg)
             if method == "tools/list":
-                return self.reply(200, "application/json", json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"resultType": "complete", "tools": NARROW_TOOLS}}).encode())
-            if method != "tools/call" or params.get("name") not in {t["name"] for t in NARROW_TOOLS}:
+                return self.reply(200, "application/json", json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"resultType": "complete", "tools": tools}}).encode())
+            if method != "tools/call" or params.get("name") not in {t["name"] for t in tools}:
                 raise ValueError("unknown MCP method or tool")
             try:
                 fmt = self.headers.get("X-Gait-Format", "geojson")  # the page's choice, not the model's
@@ -262,25 +281,31 @@ def load(path):
     mcp.setdefault("timeout", 120)
     if mcp["mode"] not in ("narrow", "passthrough"):
         raise SystemExit(f"mode must be narrow or passthrough, not {mcp['mode']!r}")
-    if mcp["mode"] == "narrow" and not (mcp.get("database") and mcp.get("layers")):
-        raise SystemExit("narrow mode needs database and layers")
+    if mcp["mode"] == "narrow":
+        if missing := [k for k in ("database", "layers", "name", "about", "skill") if not mcp.get(k)]:
+            raise SystemExit(f"narrow mode needs {', '.join(missing)}")
+        if not NAME.match(mcp["name"]):
+            raise SystemExit("name must be lowercase letters, digits and underscores, for example roads")
+    kb = cfg.get("kb") and str((Path(path).parent / cfg["kb"]).resolve())  # relative to the config file
+    if kb and not (Path(kb) / "kb.json").is_file():
+        raise SystemExit(f"kb must be a folder written by tools/export_kb.py (no {Path(kb) / 'kb.json'})")
     token = os.environ.get(mcp.get("tokenEnv", "MCP_RWEE_TOKEN"), "")
     if len(token) < 32:
         raise SystemExit(f"set {mcp.get('tokenEnv', 'MCP_RWEE_TOKEN')} to the upstream token (32+ characters)")
     url = urlsplit(mcp["url"])
     if not (url.scheme == "https" or url.scheme == "http" and url.hostname in LOCAL_HOSTS):
         raise SystemExit("a non-local upstream needs https, or the token travels in plain text")
-    return cfg.get("port", 8080), mcp, Upstream(mcp["url"], token, mcp["timeout"])
+    return cfg.get("port", 8080), mcp, Upstream(mcp["url"], token, mcp["timeout"]), kb, cfg.get("map")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("config", help="JSON config file")
     args = parser.parse_args()
-    port, mcp, upstream = load(args.config)
-    handler = partial(Handler, directory=str(WEB), upstream=upstream, cfg=mcp)
+    port, mcp, upstream, kb, page = load(args.config)
+    handler = partial(Handler, directory=str(WEB), upstream=upstream, cfg=mcp, kb=kb, page=page)
     with ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
-        print(f"Gateway: http://localhost:{port} -> {mcp['url']} ({mcp['mode']})")
+        print(f"Gateway: http://localhost:{port} -> {mcp['url']} ({mcp['mode']}{', ' + mcp['name'] if mcp['mode'] == 'narrow' else ''})")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

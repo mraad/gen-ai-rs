@@ -8,11 +8,13 @@ import unittest
 from contextlib import closing
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from tempfile import NamedTemporaryFile
+from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import gateway
 
 TOKEN = "t" * 40
+DATASET = {"name": "demo", "about": "demo dataset", "skill": "demo-sql"}
 RUN = "a" * 32
 UP_TOOLS = [{"name": "write"}, {"name": "execute"}]
 
@@ -70,12 +72,12 @@ def serve(handler):
 
 
 class Gateway(unittest.TestCase):
-    def start(self, mode):
+    def start(self, mode, **site):
         FakeUpstream.calls = []
         self.up = serve(FakeUpstream)
-        self.cfg = cfg = {"mode": mode, "database": "/db/NorthSea.ddb", "layers": "/db/Layers.json", "timeout": 5}
+        self.cfg = cfg = {"mode": mode, "database": "/db/demo.duckdb", "layers": "/db/Layers.json", "timeout": 5, **DATASET}
         upstream = gateway.Upstream(f"http://127.0.0.1:{self.up.server_address[1]}", TOKEN, 5)
-        self.gw = serve(partial(gateway.Handler, directory=str(gateway.WEB), upstream=upstream, cfg=cfg))
+        self.gw = serve(partial(gateway.Handler, directory=str(gateway.WEB), upstream=upstream, cfg=cfg, **site))
         for server in (self.up, self.gw):
             self.addCleanup(server.server_close)
             self.addCleanup(server.shutdown)
@@ -105,51 +107,55 @@ class Gateway(unittest.TestCase):
         self.start("narrow")
         self.assertEqual(self.post("tools/list", {}, **{"Content-Length": "many"})[0], 411)
 
-    def test_narrow_lists_only_two_tools(self):
+    def test_narrow_lists_only_two_tools_named_from_the_config(self):
         self.start("narrow")
-        names = [t["name"] for t in self.call_list()["result"]["tools"]]
-        self.assertEqual(names, ["northsea_layers", "northsea_query"])
+        tools = self.call_list()["result"]["tools"]
+        self.assertEqual([t["name"] for t in tools], ["demo_layers", "demo_query"])
+        for t in tools:
+            self.assertIn("demo dataset", t["description"])
+            self.assertTrue(t["description"].endswith("Rules: skill demo-sql."))
         self.assertEqual(FakeUpstream.calls, [])
+        self.assertIn("error", self.call("other_query", {"sql": "SELECT 1"}))  # another dataset's tool is unknown
 
     def call_list(self):
         return json.loads(self.post("tools/list", {})[2])
 
     def test_narrow_query_runs_the_fixed_script_with_the_token(self):
         self.start("narrow")
-        result = self.call("northsea_query", {"sql": "SELECT 1"})["result"]
+        result = self.call("demo_query", {"sql": "SELECT 1"})["result"]
         self.assertFalse(result["isError"])
         text = result["content"][0]["text"]
         self.assertIn('"row_count": 1', text)
         self.assertIn(f"/artifacts/{RUN}/result.geojson", text)
         (_, write, auth1), (_, run, auth2) = FakeUpstream.calls
-        self.assertEqual(write["path"], "northsea.py")
-        self.assertEqual(run["args"], ["query", "/db/NorthSea.ddb", '[{"name": "result", "sql": "SELECT 1"}]', "geojson"])
+        self.assertEqual(write["path"], "narrow.py")
+        self.assertEqual(run["args"], ["query", "/db/demo.duckdb", '[{"name": "result", "sql": "SELECT 1"}]', "geojson"])
         self.assertEqual({auth1, auth2}, {f"Bearer {TOKEN}"})
         self.assertNotIn(TOKEN, json.dumps(result))
 
     def test_the_page_chooses_one_file_format(self):
         self.start("narrow")
-        self.assertFalse(self.call("northsea_query", {"sql": "SELECT 1"}, **{"X-Gait-Format": "parquet"})["result"]["isError"])
+        self.assertFalse(self.call("demo_query", {"sql": "SELECT 1"}, **{"X-Gait-Format": "parquet"})["result"]["isError"])
         self.assertEqual(FakeUpstream.calls[1][1]["args"][-1], "parquet")
         before = len(FakeUpstream.calls)
-        self.assertTrue(self.call("northsea_query", {"sql": "SELECT 1"}, **{"X-Gait-Format": "csv; rm -rf"})["result"]["isError"])
+        self.assertTrue(self.call("demo_query", {"sql": "SELECT 1"}, **{"X-Gait-Format": "csv; rm -rf"})["result"]["isError"])
         self.assertEqual(len(FakeUpstream.calls), before)
 
     def test_narrow_query_takes_several_named_layers(self):
         self.start("narrow")
         queries = [{"name": "wells", "sql": "SELECT 1"}, {"name": "pipes", "sql": "SELECT 2"}]
-        self.assertFalse(self.call("northsea_query", {"queries": queries})["result"]["isError"])
+        self.assertFalse(self.call("demo_query", {"queries": queries})["result"]["isError"])
         self.assertEqual(json.loads(FakeUpstream.calls[1][1]["args"][2]), queries)
         before = len(FakeUpstream.calls)
         for bad in ([], queries + queries, [{"name": "Wells", "sql": "SELECT 1"}], [{"name": "a", "sql": "x"}, {"name": "a", "sql": "y"}],
                     [{"name": "a"}], [{"name": "../a", "sql": "x"}]):
-            self.assertTrue(self.call("northsea_query", {"queries": bad})["result"]["isError"], bad)
-        self.assertTrue(self.call("northsea_query", {"sql": "SELECT 1", "queries": queries})["result"]["isError"])
+            self.assertTrue(self.call("demo_query", {"queries": bad})["result"]["isError"], bad)
+        self.assertTrue(self.call("demo_query", {"sql": "SELECT 1", "queries": queries})["result"]["isError"])
         self.assertEqual(len(FakeUpstream.calls), before)
 
     def test_narrow_layers_passes_the_table(self):
         self.start("narrow")
-        self.call("northsea_layers", {"table": "Wells"})
+        self.call("demo_layers", {"table": "Wells"})
         self.assertEqual(FakeUpstream.calls[1][1]["args"], ["layers", "/db/Layers.json", "Wells"])
 
     def test_narrow_rejects_other_tools_and_bad_arguments_without_calling_upstream(self):
@@ -157,15 +163,15 @@ class Gateway(unittest.TestCase):
         for name in ("execute", "write", "read"):
             self.assertIn("error", self.call(name, {"target": "x"}))
         for args in ({}, {"sql": ""}, {"sql": 5}, {"sql": "x" * 20_001}, {"sql": "SELECT 1", "path": "/etc/passwd"}):
-            self.assertTrue(self.call("northsea_query", args)["result"]["isError"], args)
-        self.assertTrue(self.call("northsea_layers", {"table": 5})["result"]["isError"])
+            self.assertTrue(self.call("demo_query", args)["result"]["isError"], args)
+        self.assertTrue(self.call("demo_layers", {"table": 5})["result"]["isError"])
         self.assertEqual(FakeUpstream.calls, [])
 
     def test_narrow_script_failure_is_a_tool_error(self):
         self.start("narrow")
         FakeUpstream.outcome = {**FakeUpstream.outcome, "exit_code": 1, "stderr": "PermissionException: no files"}
         self.addCleanup(lambda: FakeUpstream.outcome.update(exit_code=0, stderr=""))
-        result = self.call("northsea_query", {"sql": "SELECT 1"})["result"]
+        result = self.call("demo_query", {"sql": "SELECT 1"})["result"]
         self.assertTrue(result["isError"])
         self.assertIn("PermissionException", result["content"][0]["text"])
 
@@ -205,23 +211,45 @@ class Gateway(unittest.TestCase):
         self.assertEqual(self.post("tools/list", {}, Origin="http://evil.example:8080", Host="evil.example:8080")[0], 403)
         self.assertEqual(self.get(f"/artifacts/{RUN}/result.geojson", {"Host": "evil.example"})[0], 403)
 
+    def test_kb_and_map_settings_come_from_the_config(self):
+        with TemporaryDirectory() as kb:
+            Path(kb, "kb.json").write_text('{"skills": {}}')
+            page = {"title": "Demo map", "center": [-97, 30], "zoom": 11}
+            self.start("narrow", kb=kb, page=page)
+            self.assertEqual(self.get("/kb/kb.json"), (200, b'{"skills": {}}'))
+            for path in ("/kb/../map.html", "/kb/%2e%2e/map.html", "/kb/../../../../etc/hosts"):  # '..' cannot leave the kb folder
+                self.assertEqual(self.get(path)[0], 404, path)
+            self.assertEqual(json.loads(self.get("/map.json")[1]), page)
+            self.assertEqual(self.get("/map.html")[0], 200)  # the page itself still comes from web/
+
+    def test_without_settings_the_page_gets_no_map_json(self):
+        self.start("narrow")
+        self.assertEqual(self.get("/map.json")[0], 404)
+
     def test_unreachable_upstream_gives_502(self):
         self.start("narrow")
         self.gw.RequestHandlerClass.keywords["upstream"].url = "http://127.0.0.1:1"
         self.assertEqual(self.get(f"/artifacts/{RUN}/result.geojson")[0], 502)
 
     def test_config_is_validated(self):
-        def load(cfg, token=TOKEN):
+        def load(cfg, token=TOKEN, **top):
             with NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-                json.dump({"mcp": cfg}, f)
+                json.dump({"mcp": cfg, **top}, f)
             self.addCleanup(os.unlink, f.name)
             os.environ["MCP_RWEE_TOKEN"] = token
             return gateway.load(f.name)
 
         self.addCleanup(os.environ.pop, "MCP_RWEE_TOKEN", None)
-        base = {"url": "http://127.0.0.1:1", "database": "d", "layers": "l"}
+        base = {"url": "http://127.0.0.1:1", "database": "d", "layers": "l", **DATASET}
         self.assertEqual(load(base)[1]["mode"], "narrow")  # narrow is the default
+        self.assertEqual(load({"url": base["url"], "mode": "passthrough"})[1]["mode"], "passthrough")  # no dataset needed
+        with TemporaryDirectory() as kb:
+            Path(kb, "kb.json").write_text("{}")
+            self.assertEqual(load(base, kb=kb)[3], str(Path(kb).resolve()))
+        with self.assertRaises(SystemExit):
+            load(base, kb="/no/such/kb")
         for bad in ({**base, "mode": "wide"}, {"url": base["url"]}, {**base, "url": "http://example.com"},
+                    *({**base, key: ""} for key in DATASET), {**base, "name": "Demo-1"},
                     {**base, "url": "http://127.0.0.1.example.com"}, {**base, "url": "http://127.0.0.1@example.com"}):
             with self.assertRaises(SystemExit):
                 load(bad)

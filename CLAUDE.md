@@ -15,14 +15,14 @@ python3 tools/test_export_kb.py
 python3 tools/test_demo_server.py
 python3 tools/test_dev_proxy.py
 python3 tools/test_gateway.py
-uv run --with duckdb python3 tools/test_northsea.py
+uv run --with duckdb python3 tools/test_narrow.py
 python3 tools/e2e.py
 python3 tools/measure.py
 python3 tools/demo_server.py
 python3 tools/gateway.py gateway.json
 ```
 
-The exporter requires PyYAML. Browser checks use Chrome and the generated files in `web/pkg` and `web/kb`; rebuild changed Rust before those checks. The optional Azure development proxy is `python3 tools/dev_proxy.py`, with `AZURE_API_BASE` and `AZURE_API_KEY` in its environment. To run the demo server in an optional OpenShell sandbox, follow `README.md`, "Run the server in OpenShell". Keep the proxy and its credentials on the host. `tools/gateway.py` fronts an mcp-rwee server (README, "Connect an mcp-rwee server"). Its token comes from the environment, never from the config file, and `narrow` stays the default `mode`. `tools/northsea.py` runs on the upstream and needs `duckdb` there; the gateway itself is standard library only. `web/map.html` and `web/map.js` are a separate page (ArcGIS Maps SDK 5.2 from the CDN, no build step); it reads tool results by wrapping `fetch`, because the core keeps no tool output.
+The exporter requires PyYAML. Browser checks use Chrome and the generated files in `web/pkg` and `web/kb`; rebuild changed Rust before those checks. The optional Azure development proxy is `python3 tools/dev_proxy.py`, with `AZURE_API_BASE` and `AZURE_API_KEY` in its environment. To run the demo server in an optional OpenShell sandbox, follow `README.md`, "Run the server in OpenShell". Keep the proxy and its credentials on the host. `tools/gateway.py` fronts an mcp-rwee server (README, "Connect an mcp-rwee server"). Its token comes from the environment, never from the config file, and `narrow` stays the default `mode`. One config per dataset sets the tool names (`name`), descriptions (`about`, `skill`), kb folder and map page settings; do not name a dataset in the gateway or the map page. Dataset configs, skills and kb exports live in the dataset projects, never in this repository. `tools/narrow.py` runs on the upstream and needs `duckdb` there; the gateway itself is standard library only. `web/map.html` and `web/map.js` are a separate page (ArcGIS Maps SDK 5.2 from the CDN, no build step); it reads tool results by wrapping `fetch`, because the core keeps no tool output.
 
 ## Design constraints
 

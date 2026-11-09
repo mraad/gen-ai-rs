@@ -75,24 +75,25 @@ Checked 2026-11-07 on Apple Silicon with OpenShell 0.1.7 and Docker through OrbS
 
 `tools/gateway.py` is a same-origin gateway for an [mcp-rwee](https://github.com/mraad/mcp-rwee) server, which needs a Bearer token that the page cannot send. The gateway serves `web/`, adds the token from the environment, and relays `/mcp` and `/artifacts/...`. The `mode` of the registration sets what the model sees:
 
-- `narrow` (default): two tools, `northsea_layers` and `northsea_query`. The model writes read-only SQL SELECTs: one `sql`, or `queries`, up to 6 named ones. The fixed script `tools/northsea.py` runs them in DuckDB with file, network and settings access removed. Each result with a GEOMETRY column also produces one file at `/artifacts/...`: `NAME.geojson`, or `NAME.parquet` (GeoParquet V1) when the request has the header `X-Gait-Format: parquet` (`result` for a single `sql`). The page sets that header from its format switch; the model cannot choose it. The map page draws every layer, each in its own color, with a switch for each. A numeric result column named `color` (for example a z-score) colors each feature instead: blue to orange, centred on 0 when the values span 0.
+- `narrow` (default): two tools, `NAME_layers` and `NAME_query`, where `name`, `about` and `skill` in the config name the dataset (for example `roads_query`). The model writes read-only SQL SELECTs: one `sql`, or `queries`, up to 6 named ones. The fixed script `tools/narrow.py` runs them in DuckDB with file, network and settings access removed. Each result with a GEOMETRY column also produces one file at `/artifacts/...`: `NAME.geojson`, or `NAME.parquet` (GeoParquet V1) when the request has the header `X-Gait-Format: parquet` (`result` for a single `sql`). The page sets that header from its format switch; the model cannot choose it. The map page draws every layer, each in its own color, with a switch for each. A numeric result column named `color` (for example a z-score) colors each feature instead: blue to orange, centred on 0 when the values span 0.
 - `passthrough`: every upstream tool, including `write` and `execute`. The model can run any Python (arcpy, DuckDB) on the upstream machine. Use it only on a trusted network.
 
 ```sh
-# gateway.json: {"port": 8080, "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN",
-#   "mode": "narrow", "database": "/path/NorthSea.ddb", "layers": "/path/Layers.json", "timeout": 120}}
+# gateway.json, one per dataset: {"port": 8080, "kb": "kb", "map": {"title": "Roads map", "intro": "...",
+#   "placeholder": "...", "center": [-97.7, 30.3], "zoom": 10},
+#   "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN", "mode": "narrow",
+#   "database": "/path/roads.duckdb", "layers": "/path/Layers.json", "timeout": 120,
+#   "name": "roads", "about": "road network", "skill": "roads-sql"}}
 MCP_RWEE_TOKEN=... python3 tools/gateway.py gateway.json
 ```
 
-The skill `northsea-duckdb` carries the SQL rules. `northsea_layers` with no table returns a compact card for every table; a result with geometry returns `row_count`, `stats` and 10 sample rows, because the map draws it from its files. Metre distances use a local projection (`laea` centered at 58N 3E, error under 0.2% across the North Sea; recipe in the rules). Narrow mode has no script cancel on browser disconnect.
+Nothing in the gateway or the map page names a dataset. `database` and `layers` are paths on the upstream host. `kb` (optional) is a folder written by `tools/export_kb.py`, relative to the config file; the gateway serves it at `/kb/`, so each dataset has its own skills (default: `web/kb`). `map` (optional) is served as `/map.json`: the map page takes its title, intro, question placeholder and start view from it, and saves its conversation per title. The config, the dataset skill and its kb belong to the dataset's own project, not to this repository. Export a kb with `uv run --with pyyaml python3 tools/export_kb.py SRC DEST`.
+
+The dataset's skill carries the SQL rules (tables, units, distance projection). `NAME_layers` with no table returns a compact card for every table; a result with geometry returns `row_count`, `stats` and 10 sample rows, because the map draws it from its files. Narrow mode has no script cancel on browser disconnect.
 
 **Token cost.** The narrow tools keep results small at the source: table cards and 10 sample rows. `passthrough` replies become JSON, so the page can read them. The trace panel shows each model call's own tokens, and the turn total with its cached share. Measured 2026-11-07 on five narrow questions with an Azure model: 106,522 tokens before the cards and samples, about 56,300 after, with 15 of 15 answers correct. Generic result shaping and a tool-call ledger were tried and removed to keep the harness minimal (guide, section 17.4).
 
-**Map page.** Open `http://localhost:8080/map.html` (use `localhost`, which the Azure proxy allows). It runs the same WASM agent (`pkg/gait_wasm.js`) beside an ArcGIS Maps SDK for JavaScript 5.2 map. Ask for features ("Show the 25 wells with the greatest water depth"); the page reads the file URLs from the `northsea_query` result and draws them with `GeoJSONLayer`, or with `ParquetLayer` when GeoParquet was selected. The GeoJSON and GeoParquet switch above the question box applies to the next question, because only that one file is written. `?q=...` fills the question box; you press Send. The left panel shows the agent at work: a progress bar and a live status line, then one row per model call (messages sent, reply, that call's tokens) and per tool call (arguments, result, time) under each turn, with totals on the turn header; the Trace box hides the rows. The page is dark, with Esri's Dark Gray Canvas basemap, a keyless tile service (CARTO dark tiles now need a key). The gateway has no user authentication. Details: `docs/index.html`, sections 16 (gateway and map page) and 17 (token cost).
-
-![The map page after "Show all the wells with depth > 350 m and color-code them by the z-score value of their depth": 600 wells from blue to orange, 4 model calls, 12,480 tokens](docs/images/map-zscore.png)
-
-Live run, 2026-11-08, Azure model and mcp-rwee on `NorthSea.ddb`.
+**Map page.** Open `http://localhost:8080/map.html` (use `localhost`, which the Azure proxy allows). It runs the same WASM agent (`pkg/gait_wasm.js`) beside an ArcGIS Maps SDK for JavaScript 5.2 map. Ask for features; the page reads the file URLs from the `NAME_query` result and draws them with `GeoJSONLayer`, or with `ParquetLayer` when GeoParquet was selected. The GeoJSON and GeoParquet switch above the question box applies to the next question, because only that one file is written. `?q=...` fills the question box; you press Send. The left panel shows the agent at work: a progress bar and a live status line, then one row per model call (messages sent, reply, that call's tokens) and per tool call (arguments, result, time) under each turn, with totals on the turn header; the Trace box hides the rows. The page is dark, with Esri's Dark Gray Canvas basemap, a keyless tile service (CARTO dark tiles now need a key). The gateway has no user authentication. Details: `docs/index.html`, sections 16 (gateway and map page) and 17 (token cost).
 
 ## Host API
 
@@ -172,12 +173,12 @@ python3 tools/test_export_kb.py
 python3 tools/test_demo_server.py
 python3 tools/test_dev_proxy.py
 python3 tools/test_gateway.py
-uv run --with duckdb python3 tools/test_northsea.py
+uv run --with duckdb python3 tools/test_narrow.py
 python3 tools/e2e.py
 python3 tools/measure.py
 ```
 
-`tools/e2e.py` also opens `map.html` through the real gateway, with a fake mcp-rwee and a fake model. It needs the network for the ArcGIS SDK and basemap, and checks that each format switch value writes and draws only that format, and that a `color` column gets a color ramp (fixtures in `fixtures/map`, written by `tools/northsea.py`). Browser checks require a fresh release build and exported fixtures. WASM-only tests: run `wasm-pack test --chrome crates/gait-wasm`, then `python3 tools/e2e.py --wasm-tests http://127.0.0.1:8000/`.
+`tools/e2e.py` also opens `map.html` through the real gateway, with a fake mcp-rwee and a fake model. It needs the network for the ArcGIS SDK and basemap, and checks that each format switch value writes and draws only that format, and that a `color` column gets a color ramp (local test data in `fixtures/map`, written by `tools/narrow.py` and kept out of git; without it the map checks print `SKIP`). Browser checks require a fresh release build and exported fixtures. WASM-only tests: run `wasm-pack test --chrome crates/gait-wasm`, then `python3 tools/e2e.py --wasm-tests http://127.0.0.1:8000/`.
 
 ## Design sources reviewed, 2026-11-07
 
