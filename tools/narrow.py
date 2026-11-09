@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Script that tools/gateway.py runs on the mcp-rwee server (needs duckdb).
 
-  northsea.py layers LAYERS_JSON [TABLE]   table list, or the metadata of one table
-  northsea.py query DATABASE QUERIES_JSON [geojson|parquet]
+  narrow.py layers LAYERS_JSON [TABLE]   table list, or the metadata of one table
+  narrow.py query DATABASE QUERIES_JSON [geojson|parquet]
                                            read-only SELECTs, a JSON list of {"name", "sql"}; prints JSON, and for each
                                            GEOMETRY result writes one file, NAME.geojson (default) or NAME.parquet
 
@@ -131,7 +131,7 @@ def query(database, queries, fmt="geojson"):
     queries = json.loads(queries) if isinstance(queries, str) else queries
     names = [q["name"] for q in queries]
     if not queries or len(queries) > MAX_QUERIES or len(set(names)) != len(names) or not all(NAME.match(n) for n in names):
-        raise ValueError(f"give 1 to {MAX_QUERIES} queries with unique names like wells_deep")
+        raise ValueError(f"give 1 to {MAX_QUERIES} queries with unique lowercase names such as layer_1")
     with duckdb.connect(database, read_only=True) as con:
         con.execute("LOAD spatial")
         con.execute("SET geometry_always_xy = true")

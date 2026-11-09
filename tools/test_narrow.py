@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""northsea.py must stay read-only and locked, and must write one GeoJSON or one GeoParquet file per layer. Needs duckdb:
-uv run --with duckdb python3 tools/test_northsea.py"""
+"""narrow.py must stay read-only and locked, and must write one GeoJSON or one GeoParquet file per layer. Needs duckdb:
+uv run --with duckdb python3 tools/test_narrow.py"""
 import json
 import os
 import tempfile
@@ -13,24 +13,24 @@ try:
 except ImportError:  # the gateway tests do not need it
     duckdb = None
 
-import northsea
+import narrow
 
 
 def one(db, sql):
-    return northsea.query(db, [{"name": "result", "sql": sql}])["layers"][0]
+    return narrow.query(db, [{"name": "result", "sql": sql}])["layers"][0]
 
 
 @unittest.skipIf(duckdb is None, "duckdb is not installed")
-class Northsea(unittest.TestCase):
+class Narrow(unittest.TestCase):
     def test_table_cards_keep_rules_and_any_unknown_hint(self):
-        line = northsea.column_card({"name": "phase", "alias": "current phase", "dtype": "String", "utype": None, "keyval": {}, "values": ["A", "B"],
+        line = narrow.column_card({"name": "phase", "alias": "current phase", "dtype": "String", "utype": None, "keyval": {}, "values": ["A", "B"],
                                      "hints": ["The phase", "Make sure to uppercase the values", "For example: given a becomes A"]})
         self.assertEqual(line, 'phase String upper "current phase": A, B | The phase')
-        self.assertEqual(northsea.column_card({"name": "country", "dtype": "String", "keyval": {"NO": "Norway"}, "values": ["NO"],
+        self.assertEqual(narrow.column_card({"name": "country", "dtype": "String", "keyval": {"NO": "Norway"}, "values": ["NO"],
                                                "hints": ["Use 'country = 'NO'' for 'norway'.", "NEVER use SQL LIKE in the WHERE"]}), "country String exact: NO=Norway")
-        self.assertEqual(northsea.column_card({"name": "depth", "dtype": "Double", "utype": "meters", "values": ["1", "2", "3"],
+        self.assertEqual(narrow.column_card({"name": "depth", "dtype": "Double", "utype": "meters", "values": ["1", "2", "3"],
                                                "hints": ["ALWAYS use SQL CAST AS DOUBLE PRECISION", "Use 'depth = cast(1 as DOUBLE PRECISION)' for 'x'."]}), "depth Double meters cast: 1, 2 +")
-        self.assertEqual(northsea.column_card({"name": "n", "dtype": "String", "values": [str(i) for i in range(20)], "hints": ["Make sure to use the SQL LIKE here"]}), "n String like: 0, 1, 2 +")
+        self.assertEqual(narrow.column_card({"name": "n", "dtype": "String", "values": [str(i) for i in range(20)], "hints": ["Make sure to use the SQL LIKE here"]}), "n String like: 0, 1, 2 +")
 
 
     def setUp(self):
@@ -59,11 +59,11 @@ class Northsea(unittest.TestCase):
         self.assertEqual(features[0]["geometry"]["coordinates"], [2, 58])
         (self.art / "result.geojson").unlink()
         sql = "SELECT OBJECTID, name, depth, geometry AS g FROM Wells ORDER BY OBJECTID"
-        out = northsea.query(self.db, json.dumps([{"name": "result", "sql": sql}]), "parquet")["layers"][0]
+        out = narrow.query(self.db, json.dumps([{"name": "result", "sql": sql}]), "parquet")["layers"][0]
         self.assertEqual((out["format"], out["file"], out["geometry_type"], out["rows"]), ("parquet", "result.parquet", "point", [[1, "a", Decimal("10.50")], [2, "b", None]]))
         self.assertEqual([p.name for p in self.art.iterdir()], ["result.parquet"])
         with self.assertRaises(ValueError):
-            northsea.query(self.db, json.dumps([{"name": "result", "sql": sql}]), "csv")
+            narrow.query(self.db, json.dumps([{"name": "result", "sql": sql}]), "csv")
         with duckdb.connect() as con:  # the ParquetLayer needs a column named geometry and DOUBLE, not DECIMAL
             con.execute("LOAD spatial")
             types = {r[0]: r[1] for r in con.execute(f"DESCRIBE SELECT * FROM '{self.art / 'result.parquet'}'").fetchall()}
@@ -75,14 +75,14 @@ class Northsea(unittest.TestCase):
             con.execute("LOAD spatial")
             con.execute("CREATE TABLE Pipes(OBJECTID INTEGER, geometry GEOMETRY)")
             con.execute("INSERT INTO Pipes VALUES (1, ST_GeomFromText('LINESTRING(2 58, 3 59)'))")
-        out = northsea.query(self.db, json.dumps([{"name": "wells", "sql": "SELECT OBJECTID, geometry FROM Wells"},
+        out = narrow.query(self.db, json.dumps([{"name": "wells", "sql": "SELECT OBJECTID, geometry FROM Wells"},
                                                   {"name": "pipes", "sql": "SELECT OBJECTID, geometry FROM Pipes"}]))["layers"]
         self.assertEqual([(x["name"], x["geometry_type"], x["file"]) for x in out],
                          [("wells", "point", "wells.geojson"), ("pipes", "polyline", "pipes.geojson")])
         self.assertEqual(sorted(p.name for p in self.art.iterdir()), ["pipes.geojson", "wells.geojson"])
         for bad in ([], [{"name": "A", "sql": "SELECT 1"}], [{"name": "a", "sql": "SELECT 1"}] * 2, [{"name": "../x", "sql": "SELECT 1"}]):
             with self.assertRaises(ValueError):
-                northsea.query(self.db, bad)
+                narrow.query(self.db, bad)
 
     def test_metre_distance_in_a_local_projection(self):  # the recipe in rules.md
         sql = ("SELECT round(ST_Distance(ST_Transform(ST_Point(2, 58), 'EPSG:4326', '+proj=laea +lat_0=58 +lon_0=3 +datum=WGS84 +units=m +no_defs', always_xy := true),"

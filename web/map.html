@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- Scripts come only from this origin and the ArcGIS CDN. An API key typed here stays in page memory, so keep that list short. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.arcgis.com; style-src 'self' 'unsafe-inline' https://js.arcgis.com; img-src 'self' data: blob: https:; font-src https://js.arcgis.com data:; worker-src blob: 'self' https://js.arcgis.com; connect-src 'self' blob: data: http://localhost:* http://127.0.0.1:* https://*.arcgisonline.com https://js.arcgis.com https://*.arcgis.com https://api.openai.com https://openrouter.ai; object-src 'none'; base-uri 'none'">
-<title>North Sea map</title>
+<title>Map</title>
 <link rel="stylesheet" href="https://js.arcgis.com/5.2/@arcgis/core/assets/esri/themes/dark/main.css">
 <style>
   :root { color-scheme: dark; --bg: #14181a; --panel: #1c2225; --fg: #e6e9ea; --muted: #98a3a8; --line: #2d363a; --accent: #4fc1cf; --step: #262e31; --error: #ff9a8f; --busy: #f2b84b; --ok: #6fcf97; }
@@ -93,8 +93,8 @@
 <body>
 <aside>
   <header>
-    <h1>North Sea map</h1>
-    <p class="muted">Ask about wells, pipelines or discoveries. The answer is drawn on the map.</p>
+    <h1 id="title">Map</h1>
+    <p id="intro" class="muted">Ask about the data. The answer is drawn on the map.</p>
   </header>
   <details>
     <summary>Connection</summary>
@@ -118,7 +118,7 @@
     </div>
   </div>
   <form id="chat">
-    <input id="prompt" aria-label="Question" autocomplete="off" placeholder="Show the 20 wells with the greatest water depth" autofocus>
+    <input id="prompt" aria-label="Question" autocomplete="off" autofocus>
     <button id="send" class="primary" disabled>Send</button>
     <button id="stop" type="button" disabled>Stop</button>
     <button id="clear" type="button">Clear</button>

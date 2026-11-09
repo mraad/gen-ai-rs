@@ -4,3 +4,4 @@ web/pkg/
 web/kb/
 __pycache__/
 .DS_Store
+fixtures/map/

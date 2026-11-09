@@ -948,7 +948,7 @@ Server routes:
       <tr><td><code>web/map.html</code> and <code>web/map.js</code></td><td>Browser</td><td>Question box, trace panel, map, layer list and format switch. Static files with no build step.</td></tr>
       <tr><td>WASM agent (<code>pkg/gait_wasm.js</code>)</td><td>Browser</td><td>The agent loop. It calls the model and calls tools through <code>/mcp</code>.</td></tr>
       <tr><td><code>tools/gateway.py</code></td><td>Host, <code>127.0.0.1</code></td><td>Serves <code>web/</code>. Relays <code>/mcp</code> and <code>/artifacts/...</code>. Adds the token and checks arguments. Standard library only.</td></tr>
-      <tr><td><code>tools/northsea.py</code></td><td><code>mcp-rwee</code> machine</td><td>The fixed script for <code>narrow</code> mode. It runs SQL in locked-down DuckDB and writes the map files. It needs <code>duckdb</code> on that machine.</td></tr>
+      <tr><td><code>tools/narrow.py</code></td><td><code>mcp-rwee</code> machine</td><td>The fixed script for <code>narrow</code> mode. It runs SQL in locked-down DuckDB and writes the map files. It needs <code>duckdb</code> on that machine.</td></tr>
       <tr><td><code>mcp-rwee</code></td><td>Upstream machine</td><td>Tools <code>read</code>, <code>write</code>, <code>edit</code> and <code>execute</code>. A per-run artifact folder for output files.</td></tr>
       <tr><td><code>tools/dev_proxy.py</code></td><td>Host, port 8787</td><td>The optional Azure model proxy. It holds the model key. See section 14.5.</td></tr>
     </tbody>
@@ -959,7 +959,7 @@ Server routes:
   <div class="table-wrap"><table>
     <caption>Gateway modes</caption>
     <thead><tr><th scope="col">Mode</th><th scope="col">The model sees</th><th scope="col">Use when</th></tr></thead><tbody>
-      <tr><td><code>narrow</code></td><td>Two tools: <code>northsea_layers</code> and <code>northsea_query</code>. The model writes read-only SQL. The gateway runs the fixed script <code>tools/northsea.py</code> on the upstream.</td><td>The users are not trusted with code execution.</td></tr>
+      <tr><td><code>narrow</code></td><td>Two tools: <code>NAME_layers</code> and <code>NAME_query</code>. The <code>name</code> in the configuration sets NAME, for example <code>roads</code>. The model writes read-only SQL. The gateway runs the fixed script <code>tools/narrow.py</code> on the upstream.</td><td>The users are not trusted with code execution.</td></tr>
       <tr><td><code>passthrough</code></td><td>Every upstream tool, including <code>write</code> and <code>execute</code>. The model can run any Python on the upstream machine.</td><td>The network and the users are trusted, or the question needs arcpy or an exact geodesic distance.</td></tr>
     </tbody>
   </table></div>
@@ -987,11 +987,11 @@ Server routes:
   <div class="table-wrap"><table>
     <caption>Tools in narrow mode</caption>
     <thead><tr><th scope="col">Tool</th><th scope="col">Arguments</th><th scope="col">Result</th></tr></thead><tbody>
-      <tr><td><code>northsea_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table (section 17.1). With a table: the full metadata of that table.</td></tr>
-      <tr><td><code>northsea_query</code></td><td>Either <code>sql</code>, or <code>queries</code> with 1 to 6 items. Each item has a <code>name</code> and a <code>sql</code>. A name matches <code>^[a-z][a-z0-9_]{0,31}$</code>. Names are unique. Each SQL string has 1 to 20,000 characters.</td><td>A JSON object with one entry in <code>layers</code> for each query. A single <code>sql</code> gets the name <code>result</code>. After the JSON, a <code>files:</code> list gives the URL of each map file.</td></tr>
+      <tr><td><code>NAME_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table (section 17.1). With a table: the full metadata of that table.</td></tr>
+      <tr><td><code>NAME_query</code></td><td>Either <code>sql</code>, or <code>queries</code> with 1 to 6 items. Each item has a <code>name</code> and a <code>sql</code>. A name matches <code>^[a-z][a-z0-9_]{0,31}$</code>. Names are unique. Each SQL string has 1 to 20,000 characters.</td><td>A JSON object with one entry in <code>layers</code> for each query. A single <code>sql</code> gets the name <code>result</code>. After the JSON, a <code>files:</code> list gives the URL of each map file.</td></tr>
     </tbody>
   </table></div>
-  <p>For each call, the gateway writes <code>northsea.py</code> to the upstream work folder. Then it calls <code>execute</code> on it. The script time limit is <code>timeout</code> in the configuration (default 120 seconds). The HTTP request waits 30 seconds more.</p>
+  <p>For each call, the gateway writes <code>narrow.py</code> to the upstream work folder. Then it calls <code>execute</code> on it. The script time limit is <code>timeout</code> in the configuration (default 120 seconds). The HTTP request waits 30 seconds more.</p>
   <p>Each entry in <code>layers</code> has these fields:</p>
   <div class="table-wrap"><table>
     <caption>Fields of one query result</caption>
@@ -1015,12 +1015,12 @@ Server routes:
     <li>It sets <code>enable_external_access = false</code>. SQL cannot read other files, attach a database, or open a network connection.</li>
     <li>It sets <code>lock_configuration = true</code>. SQL cannot change these settings back.</li>
   </ol>
-  <p>A check with <code>SELECT * FROM read_csv('/etc/hosts')</code> failed with <code>PermissionException</code>. <code>tools/test_northsea.py</code> tries 7 SQL strings that try to leave the sandbox. All 7 fail.</p>
+  <p>A check with <code>SELECT * FROM read_csv('/etc/hosts')</code> failed with <code>PermissionException</code>. <code>tools/test_narrow.py</code> tries 7 SQL strings that try to leave the sandbox. All 7 fail.</p>
 
   <h3>16.6 Map files in one format</h3>
   <p>A query result with a GEOMETRY column gets one map file. The page selects the format. The model does not select it.</p>
   <figure>
-    <a href="images/map-format.svg"><img src="images/map-format.svg" width="600" height="255" loading="lazy" alt="The page sends its format in a header. The gateway checks it and passes it to northsea.py, which writes only that file. The page draws the file with the matching layer and reads it through the gateway."></a>
+    <a href="images/map-format.svg"><img src="images/map-format.svg" width="600" height="255" loading="lazy" alt="The page sends its format in a header. The gateway checks it and passes it to narrow.py, which writes only that file. The page draws the file with the matching layer and reads it through the gateway."></a>
     <figcaption><strong>Figure 11.</strong> One question gives one file for each layer, in the format that the page selected.</figcaption>
   </figure>
   <div class="table-wrap"><table>
@@ -1031,26 +1031,30 @@ Server routes:
     </tbody>
   </table></div>
   <p>The page reads each file through <code>/artifacts/RUN/NAME</code>. <code>RUN</code> has 32 hexadecimal characters. The gateway adds the token and streams the file from the upstream. It has no size limit for map files. All 1,684 Discoveries features as GeoJSON are 15.2 MiB. The gateway keeps a 16 MiB limit only for <code>/mcp</code> replies.</p>
-  <p>The page draws each layer in one color. A numeric result column with the name <code>color</code> changes this. The page then colors each feature by that value, with the <code>min</code> and <code>max</code> from <code>stats</code> as the ends of the ramp. If the values are on the two sides of 0, for example z-scores, the ramp goes from blue through gray to orange, with gray at 0. Other values go from blue (low) to orange (high). The layer list shows the ramp as the swatch. The rule is in the <code>northsea-duckdb</code> skill resource <code>rules.md</code>.</p>
+  <p>The page draws each layer in one color. A numeric result column with the name <code>color</code> changes this. The page then colors each feature by that value, with the <code>min</code> and <code>max</code> from <code>stats</code> as the ends of the ramp. If the values are on the two sides of 0, for example z-scores, the ramp goes from blue through gray to orange, with gray at 0. Other values go from blue (low) to orange (high). The layer list shows the ramp as the swatch. The skill of the dataset tells the model when to add this column.</p>
   <p><code>ParquetLayer</code> first sends <code>HEAD</code> to get the size. Then it sends <code>GET</code> with a <code>Range</code> header. <a href="#ref-range">[RANGE]</a> The gateway sends <code>HEAD</code> and <code>Range</code> to the upstream unchanged. It returns <code>Content-Range</code>, <code>Accept-Ranges</code> and <code>Content-Length</code>. It adds <code>Content-Disposition: attachment</code> and <code>X-Content-Type-Options: nosniff</code>.</p>
 
   <h3>16.7 Configure and start the gateway</h3>
   <p><strong>Precondition:</strong> You completed section 3.4, steps 1 and 2. The <code>mcp-rwee</code> server runs with DuckDB. Its token is in the variable <code>MCP_RWEE_TOKEN</code>.</p>
   <ol class="procedure">
-    <li>Start <code>mcp-rwee</code> on the upstream machine.<pre><code>uv run --with duckdb server.py --prompt prompts/northsea-duckdb.md --workdir WORKDIR --artifact-dir ARTDIR --port 8765</code></pre></li>
-    <li>Make a configuration file, for example <code>gateway.json</code>. Do not put the token in it.<pre><code>{"port": 8080, "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN",
- "mode": "narrow", "database": "/path/NorthSea.ddb", "layers": "/path/Layers.json", "timeout": 120}}</code></pre></li>
+    <li>Start <code>mcp-rwee</code> on the upstream machine.<pre><code>uv run --with duckdb server.py --prompt PROMPT --workdir WORKDIR --artifact-dir ARTDIR --port 8765</code></pre></li>
+    <li>Make one configuration file for each dataset, for example <code>gateway.json</code>. Do not put the token in it.<pre><code>{"port": 8080, "kb": "kb",
+ "map": {"title": "Roads map", "intro": "...", "placeholder": "...", "center": [-97.7, 30.3], "zoom": 10},
+ "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN", "mode": "narrow",
+  "database": "/path/roads.duckdb", "layers": "/path/Layers.json", "timeout": 120,
+  "name": "roads", "about": "road network", "skill": "roads-sql"}}</code></pre>
+    <p>In narrow mode, <code>name</code>, <code>about</code> and <code>skill</code> are necessary. They set the tool names and the tool descriptions. <code>database</code> and <code>layers</code> are paths on the upstream machine. <code>kb</code> is optional. It is a folder from <code>tools/export_kb.py</code>, relative to the configuration file. The gateway serves it at <code>/kb/</code>. <code>map</code> is optional. The gateway serves it as <code>/map.json</code>. The map page reads its title, intro, placeholder, center and zoom from it.</p></li>
     <li>Start the gateway.<pre><code>MCP_RWEE_TOKEN=... python3 tools/gateway.py gateway.json</code></pre></li>
     <li>Start the model proxy in a second terminal.<pre><code>AZURE_API_BASE=... AZURE_API_KEY=... python3 tools/dev_proxy.py</code></pre></li>
     <li>Open <a href="http://localhost:8080/map.html">http://localhost:8080/map.html</a>. Use <code>localhost</code>, because the proxy accepts only that origin.</li>
   </ol>
   <p>The demo page at <a href="http://localhost:8080">http://localhost:8080</a> also works through the gateway. Use a real model there. The scripted mock model asks for <code>multiply</code>, and the gateway does not offer it.</p>
-  <p>The skill <code>northsea-duckdb</code> in <code>fixtures/kb-src/skills</code> gives the model the SQL rules. Export the bundle again after you change it (section 9.4).</p>
+  <p>The skill of the dataset gives the model the SQL rules. The configuration, the skill source and the exported kb belong to the project of the dataset. They are not in this repository. Export the bundle again after you change the skill (section 9.4).</p>
 
   <h3>16.8 Use the map page</h3>
   <ol class="procedure">
     <li>Under <strong>Map file for the next question</strong>, select <strong>GeoJSON</strong> or <strong>GeoParquet</strong>.</li>
-    <li>Type a question that asks for features. For example: <q>Show all wells with depth &gt; 350 m and within 5 mi of an in-service pipeline</q>.</li>
+    <li>Type a question that asks for features. For example: <q>Show the points within 5 mi of a line</q>.</li>
     <li>Press <strong>Send</strong>.</li>
     <li>Watch the trace panel (section 16.9).</li>
     <li>Read the answer.</li>
@@ -1058,13 +1062,9 @@ Server routes:
     <li>To hide a layer, clear its box in the layer list.</li>
     <li>To start a new conversation, press <strong>Clear</strong>. The page removes the saved conversation, every added map layer and any open popup. The basemap stays.</li>
   </ol>
-  <figure>
-    <a href="images/map-zscore.png"><img src="images/map-zscore.png" width="720" height="450" loading="lazy" alt="The map page after the question: show all the wells with depth greater than 350 m and color-code them by the z-score of their depth. The trace panel shows 4 model calls and 12,480 tokens. The map shows 600 wells, colored from blue to orange."></a>
-    <figcaption><strong>Figure 12.</strong> A live run on 8 November 2026 with an Azure model and <code>mcp-rwee</code>. The result has a numeric <code>color</code> column (the z-score), so the wells go from blue to orange.</figcaption>
-  </figure>
   <p>The conversation survives a page reload (section 11.4). The layers do not.</p>
   <p>A link with <code>?q=...</code> fills the question box. It does not send the question. You press Send.</p>
-  <p>A question that relates two tables, for example wells near a pipeline, gives two layers. Each layer has its own color. The page draws polygons first, then lines, then points. The map zooms to the extent of all layers.</p>
+  <p>A question that relates two tables, for example points near a line, gives two layers. Each layer has its own color. The page draws polygons first, then lines, then points. The map zooms to the extent of all layers.</p>
   <p>The format switch applies to the next question. It does not redraw the current result, because its files exist in one format only. To see the other format, select it and ask again.</p>
   <p>Notes on how the page works:</p>
   <ul>
@@ -1094,7 +1094,7 @@ Server routes:
 
   <h3>16.10 Limits of narrow mode</h3>
   <ul>
-    <li>Distances in metres use one local projection for the whole North Sea (<code>laea</code> centred at 58N 3E). The error is less than 0.2%. For exact geodesic distances on long lines, use <code>passthrough</code>.</li>
+    <li>Distances in metres use the local projection that the skill of the dataset gives. For exact geodesic distances on long lines, use <code>passthrough</code>.</li>
     <li>One tool call gives at most 6 layers.</li>
     <li>A query reads at most 100,000 rows.</li>
     <li>A result with geometry shows the model 10 sample rows. To read every value, the model selects the values without geometry. Then it sees up to 200 rows.</li>
@@ -1104,10 +1104,8 @@ Server routes:
   </ul>
 
   <h3>16.11 Checked results</h3>
-  <p>Checked from 7 to 8 November 2026 on Apple Silicon with <code>mcp-rwee</code> and <code>NorthSea.ddb</code>.</p>
+  <p>Checked from 7 to 9 November 2026 on Apple Silicon with <code>mcp-rwee</code>. The results for each dataset are in the project of that dataset.</p>
   <ul>
-    <li>A real Azure turn for <q>Show all wells with depth &gt; 350 m and within 5 mi of an in-service pipeline</q> drew 169 wells and 17 pipelines. In GeoParquet mode it wrote only two <code>.parquet</code> files. In GeoJSON mode it wrote only two <code>.geojson</code> files.</li>
-    <li><q>Show the 25 wells with the greatest water depth</q> drew 25 points with <code>GeoJSONLayer</code> and with <code>ParquetLayer</code>. <q>Show all pipelines on the map</q> drew 73 lines in both formats.</li>
     <li>In <code>narrow</code> mode, <code>tools/list</code> gave two tools. In <code>passthrough</code> mode, it gave <code>read</code>, <code>write</code>, <code>edit</code> and <code>execute</code>.</li>
     <li>A call to <code>execute</code> in <code>narrow</code> mode gave an error. The upstream did not receive it.</li>
   </ul>
@@ -1117,7 +1115,7 @@ Server routes:
   <h2>17. Reduce the token cost</h2>
   <p>Each model call sends the full conversation of the turn again. Thus, a large tool result costs tokens at each later call in that turn. The <code>narrow</code> tools keep their results small.</p>
   <h3>17.1 Table cards</h3>
-  <p><code>northsea_layers</code> with no table gives a legend and one card for each table. A card has the table name, the geometry type, the display column, a short description and one line for each column.</p>
+  <p><code>NAME_layers</code> with no table gives a legend and one card for each table. A card has the table name, the geometry type, the display column, a short description and one line for each column.</p>
   <p>An example column line:</p>
   <pre><code>water_depth Double m cast "Water depth": 104.5, 350.0 +</code></pre>
   <ul>
@@ -1239,7 +1237,7 @@ Server routes:
     <li>Check the demo server.<pre><code>python3 tools/test_demo_server.py</code></pre></li>
     <li>Check the development proxy.<pre><code>python3 tools/test_dev_proxy.py</code></pre></li>
     <li>Check the gateway.<pre><code>python3 tools/test_gateway.py</code></pre></li>
-    <li>Check the upstream script. This check needs DuckDB.<pre><code>uv run --with duckdb python3 tools/test_northsea.py</code></pre></li>
+    <li>Check the upstream script. This check needs DuckDB.<pre><code>uv run --with duckdb python3 tools/test_narrow.py</code></pre></li>
   </ol>
   <h3>20.3 Browser checks</h3>
   <p><strong>Precondition:</strong> A current release package and current example skill bundle are present in <code>web/</code>.</p>
@@ -1250,9 +1248,9 @@ Server routes:
   <p>The browser suite starts an isolated Chrome profile. It serves local MCP and model fixtures. It does not spend tokens on a live provider.</p>
   <figure>
     <a href="images/e2e-map.svg"><img src="images/e2e-map.svg" width="600" height="310" loading="lazy" alt="tools/e2e.py opens map.html in isolated Chrome through the real gateway. A fake mcp-rwee serves fixture files and a fake model on another origin asks for two layers. The ArcGIS SDK loads from the network."></a>
-    <figcaption><strong>Figure 13.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
+    <figcaption><strong>Figure 12.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
   </figure>
-  <p>The suite also opens <code>map.html</code> through the real gateway (<code>tools/gateway.py</code>). A fake mcp-rwee server answers <code>write</code> and <code>execute</code>, and serves the files in <code>fixtures/map</code> with <code>HEAD</code> and <code>Range</code>. <code>tools/northsea.py</code> wrote these files: 2 wells and 1 pipeline, in each format. A fake model on a second origin asks for the two layers and then answers. For GeoParquet and then GeoJSON, the suite checks that the server receives only that format, that the map draws both layers from those files, and that the switch does not redraw the current result. This part needs the network, because the page loads the ArcGIS Maps SDK and the basemap.</p>
+  <p>The suite also opens <code>map.html</code> through the real gateway (<code>tools/gateway.py</code>). A fake mcp-rwee server answers <code>write</code> and <code>execute</code>, and serves the files in <code>fixtures/map</code> with <code>HEAD</code> and <code>Range</code>. These files are local test data and are not in the repository. <code>tools/narrow.py</code> wrote them: 2 points and 1 line, in each format. A fake model on a second origin asks for the two layers and then answers. For GeoParquet and then GeoJSON, the suite checks that the server receives only that format, that the map draws both layers from those files, and that the switch does not redraw the current result. This part needs the network, because the page loads the ArcGIS Maps SDK and the basemap.</p>
   <div class="caution"><p><strong>Caution:</strong> Without a network connection, the map checks fail and the suite exits with an error.</p></div>
   <p>The suite covers MCP JSON and SSE results, pagination, cancellation, duplicate names, skill loading, saved and damaged state, compaction, UI controls, reload, Clear, and reconnect races.</p>
   <p>The suite loads generated files from <code>web/pkg</code>. A stale release package can make it test older code.</p>
@@ -1352,12 +1350,11 @@ Server routes:
       <tr><td><a href="../tools/demo_server.py"><code>tools/demo_server.py</code></a></td><td>The local static server and sample MCP multiply tool.</td></tr>
       <tr><td><a href="../tools/dev_proxy.py"><code>tools/dev_proxy.py</code></a></td><td>The local Azure development proxy.</td></tr>
       <tr><td><a href="../tools/gateway.py"><code>tools/gateway.py</code></a></td><td>The same-origin gateway to <code>mcp-rwee</code>: modes, Host and Origin checks, argument checks, the format header and streamed map files.</td></tr>
-      <tr><td><a href="../tools/northsea.py"><code>tools/northsea.py</code></a></td><td>The fixed script that runs on the upstream: table cards, locked-down DuckDB, the query result and one map file in the chosen format.</td></tr>
+      <tr><td><a href="../tools/narrow.py"><code>tools/narrow.py</code></a></td><td>The fixed script that runs on the upstream: table cards, locked-down DuckDB, the query result and one map file in the chosen format.</td></tr>
       <tr><td><a href="../web/map.html"><code>web/map.html</code></a> and <a href="../web/map.js"><code>web/map.js</code></a></td><td>The map page, its trace panel and its Content Security Policy.</td></tr>
       <tr><td><a href="../openshell/Dockerfile"><code>openshell/Dockerfile</code></a></td><td>The image for the optional OpenShell sandbox.</td></tr>
       <tr><td><a href="../tools/e2e.py"><code>tools/e2e.py</code></a></td><td>Browser fixtures and end-to-end checks, including the map test with a fake <code>mcp-rwee</code> and a fake model.</td></tr>
-      <tr><td><a href="../fixtures/map/layers.json"><code>fixtures/map/</code></a></td><td>Map test files written by <code>tools/northsea.py</code>: 2 wells and 1 pipeline in GeoJSON and GeoParquet, and the query result.</td></tr>
-      <tr><td><a href="../fixtures/kb-src/skills/northsea-duckdb/SKILL.md"><code>northsea-duckdb</code> skill</a></td><td>The SQL rules for the North Sea tables, with one reference file of statistics and a two-layer example.</td></tr>
+      <tr><td><code>fixtures/map/</code></td><td>Local map test files, not in the repository, written by <code>tools/narrow.py</code>. Without them, <code>tools/e2e.py</code> skips the map checks: 2 wells and 1 pipeline in GeoJSON and GeoParquet, and the query result.</td></tr>
       <tr><td><a href="../tools/measure.py"><code>tools/measure.py</code></a></td><td>Artifact size, startup, and MCP timing measurements.</td></tr>
       <tr><td><a href="../Cargo.toml"><code>Cargo.toml</code></a> and <a href="../crates/gait-wasm/Cargo.toml"><code>gait-wasm/Cargo.toml</code></a></td><td>Release settings, dependencies, web bindings, and WASM optimization settings.</td></tr>
     </tbody>
@@ -1372,7 +1369,7 @@ Server routes:
     <li><a href="../tools/test_demo_server.py">Demo server Origin, metadata, and input checks.</a></li>
     <li><a href="../tools/test_dev_proxy.py">Proxy streaming checks.</a></li>
     <li><a href="../tools/test_gateway.py">Gateway token, mode, format header, streamed file, HEAD, Host and Origin checks.</a></li>
-    <li><a href="../tools/test_northsea.py">Table cards, query output, output files and DuckDB lockdown checks.</a></li>
+    <li><a href="../tools/test_narrow.py">Table cards, query output, output files and DuckDB lockdown checks.</a></li>
   </ul>
 </section>
 
