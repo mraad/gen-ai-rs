@@ -57,9 +57,14 @@ function addFile(format, { url, name, geometry_type }) {
   name ||= href.pathname.split("/").pop().replace(/\.[^.]*$/, "") || "layer";
   if (batch !== turn) { layers.clear(); batch = turn; } // same rule as query results: a new question starts a new map
   layers.set(name, { info: { name, format, url: href.pathname + href.search, geometry_type, row_count: null }, visible: true });
-  return draw().then(() => {
+  return draw().then((failed) => {
     const entry = layers.get(name);
-    if (!entry?.layer || !view.map.layers.includes(entry.layer)) throw new Error(`could not draw ${name}: ${$("summary").textContent}`);
+    if (failed || !entry?.layer || !view.map.layers.includes(entry.layer)) {
+      if (entry?.layer) view.map.remove(entry.layer);
+      layers.delete(name);
+      showList([...layers.values()]);
+      throw new Error(`could not draw ${name}: ${failed?.message ?? "the layer is not on the map"}`);
+    }
     return `Added ${name}: ${entry.info.row_count} ${entry.info.geometry_type} features.`;
   });
 }
@@ -133,7 +138,7 @@ function readToolResult(reply) {
 
 async function draw() {
   document.body.dataset.drawn = "";
-  for (const entry of layers.values()) if (entry.layer) view.map.remove(entry.layer);
+  view.map.removeAll(); // also the layers of entries already replaced or cleared; the basemap is separate and stays
   const entries = [...layers.values()];
   entries.forEach((entry, i) => { entry.color = COLORS[i % COLORS.length]; });
   const added = entries.toSorted((a, b) => (DRAW_ORDER[a.info.geometry_type] ?? 2) - (DRAW_ORDER[b.info.geometry_type] ?? 2));
@@ -168,6 +173,7 @@ async function draw() {
     if (added.every((e) => view.map.layers.includes(e.layer))) document.body.dataset.drawn = [...new Set(added.map((e) => e.info.format))].join(" ");
   } catch (error) {
     $("summary").textContent += `. The map could not draw it: ${error.message} ${error.details?.error?.message ?? error.details?.error ?? ""}`;
+    return error;
   }
 }
 function showList(entries) {

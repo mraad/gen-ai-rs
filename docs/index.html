@@ -1259,6 +1259,7 @@ Server routes:
     <li><strong>Same origin:</strong> <code>map_add_geojson</code> and <code>map_add_geoparquet</code> accept only a URL on the page origin. A <code>NAME_query</code> result gives such a URL in its <code>files:</code> list. Another origin is a tool error.</li>
     <li><strong>New map for each question:</strong> The first layer of a new question removes the layers of the previous question. Later layers in the same question are added. A query result follows the same rule.</li>
     <li><strong>Name:</strong> Without <code>name</code>, the layer name is the file name without the extension. A layer with the same name replaces the earlier layer.</li>
+    <li><strong>Failure:</strong> If the file does not load, the tool returns a tool error. The page removes the failed layer from the map and from the layer list.</li>
     <li><strong>GeoJSON type:</strong> The tool learns the geometry type and the feature count after the layer loads. It then sets the symbol for that type.</li>
     <li><strong>GeoParquet type:</strong> The model gives <code>geometry_type</code>, because <code>ParquetLayer</code> needs it before it loads.</li>
     <li><strong>WGS84:</strong> The extent tools use longitude and latitude in degrees. The view uses Web Mercator. The tools convert the values and round them to 6 decimal places.</li>

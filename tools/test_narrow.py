@@ -114,6 +114,12 @@ class Narrow(unittest.TestCase):
         self.assertEqual((out["row_count"], out["truncated"], count), (3, True, 3))
         self.assertEqual(sorted(p.name for p in self.art.iterdir()), ["result.parquet"])  # no .tmp left
 
+    def test_a_database_table_named_result_is_not_hidden(self):
+        with duckdb.connect(self.db) as con:
+            con.execute("CREATE TABLE result AS SELECT 7 AS n")
+        out = narrow.query(self.db, json.dumps([{"name": "a", "sql": "SELECT 1 AS x"}, {"name": "b", "sql": "SELECT n FROM result"}]))
+        self.assertEqual(out["layers"][1]["rows"], [[7]])
+
     def test_plain_query_writes_no_files(self):
         out = one(self.db, "SELECT count(*) AS n FROM Wells")
         self.assertEqual((out["columns"], out["rows"]), (["n"], [[2]]))

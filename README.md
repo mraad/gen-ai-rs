@@ -34,7 +34,7 @@ Open http://localhost:8080. Mock mode calls the actual MCP demo endpoint with a 
 
 [OpenShell](https://github.com/NVIDIA/OpenShell) is an optional runtime that isolates the server in a sandbox with a deny-by-default network policy.
 
-**Why use it.** Tools run on the server, and a model chooses when to call them and with what arguments. Model output is untrusted, because a prompt or a tool result can steer it. Tool validation and authorization are the first defense. A sandbox limits the damage if they fail:
+**Why use it.** Server tools run on the server, and a model chooses when to call them and with what arguments. Model output is untrusted, because a prompt or a tool result can steer it. Tool validation and authorization are the first defense. A sandbox limits the damage if they fail: Page tools run in the browser page, so the sandbox does not contain them.
 
 - **Network:** the server cannot open outbound connections unless a policy allows them.
 - **Files:** the sandbox receives only the files you upload, not your home folder or repository.
@@ -136,6 +136,7 @@ There is no legacy initialization/session fallback, OAuth UI, elicitation, sampl
 The page can offer its own tools, for example to move the map the user sees. It registers them with the standard WebMCP API; the agent finds them with `document.modelContext.getTools()` and calls them with `executeTool()`. There is no `tools` option in `create()`.
 
 ```js
+const controller = new AbortController();
 document.modelContext.registerTool({
   name: 'page_read_messages',
   description: 'Read the chat messages shown on this page.',

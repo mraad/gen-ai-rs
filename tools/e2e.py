@@ -837,6 +837,9 @@ def test_map_tools(browser):
           if (%s) {
             out.wells = await call("map_add_geojson", {url: run + "wells.geojson"});
             out.pipes = await call("map_add_geoparquet", {url: run + "pipes.parquet", geometry_type: "polyline"});
+            out.again = await call("map_add_geojson", {url: run + "wells.geojson"});
+            out.wellLayers = gaitMap.map.layers.toArray().filter((l) => l.title === "wells").length;
+            out.missingFile = await call("map_add_geojson", {url: run + "missing.geojson"});
             out.layers = await call("map_list_layers");
             out.hidden = await call("map_set_layer_visible", {name: "pipes", visible: false});
             out.drawn = gaitMap.map.layers.toArray().map((l) => [l.title, l.visible, l.geometryType]);
@@ -856,6 +859,8 @@ def test_map_tools(browser):
             check("map tools: GeoJSON and GeoParquet files from this origin are drawn and listed", out["layers"] == [
                 {"name": "wells", "features": 2, "geometry": "point", "visible": True}, {"name": "pipes", "features": 1, "geometry": "polyline", "visible": True}]
                 and out["summary"].startswith("2 layers, 3 features"), out)
+            check("map tools: adding a layer with the same name replaces it on the map", out["wellLayers"] == 1 and str(out["again"]).startswith("Added wells"), out)
+            check("map tools: a file that does not load is a tool error and leaves no layer", str(out["missingFile"]).startswith("error") and all(l["name"] != "missing" for l in out["layers"]), out)
             check("map tools: set_layer_visible hides a layer on the map", ["pipes", False, "polyline"] in out["drawn"] and ["wells", True, "point"] in out["drawn"], out["drawn"])
             check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "2 layers" in out["cleared"], out)
         else:
