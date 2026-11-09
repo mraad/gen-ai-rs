@@ -60,9 +60,9 @@
 <body>
 <a class="skip" href="#main">Skip to the guide</a>
 <header>
-  <p class="meta">gen-ai-rs • Technical guide • Updated 8 November 2026</p>
+  <p class="meta">gen-ai-rs • Technical guide • Updated 9 November 2026</p>
   <h1>Minimal browser agent in Rust and WebAssembly</h1>
-  <p>One agent calls a model and executes tools through <code>/mcp</code>. Skills load when the model needs them. Events go to the host application. A gateway connects the agent to an <code>mcp-rwee</code> server, and a map page shows the query results.</p>
+  <p>One agent calls a model and executes tools through <code>/mcp</code>. The page can also offer its own tools through WebMCP. Skills load when the model needs them. Events go to the host application. A gateway connects the agent to an <code>mcp-rwee</code> server, and a map page shows the query results.</p>
   <p class="meta">Code and examples describe this repository. Protocol version: <strong>2026-07-28</strong>. <a href="../README.md">Open the short README</a>.</p>
   <nav aria-label="Contents">
     <h2>Contents</h2>
@@ -73,6 +73,7 @@
       <li><a href="#host-api">Use the host API</a></li>
       <li><a href="#loop">Follow one agent turn</a></li>
       <li><a href="#mcp">Connect MCP tools</a></li>
+      <li><a href="#page-tools">Expose page tools (WebMCP)</a></li>
       <li><a href="#validation">Validate tool arguments and results</a></li>
       <li><a href="#skills">Load and disclose skills</a></li>
       <li><a href="#export">Prepare a skill bundle</a></li>
@@ -117,6 +118,9 @@
       <tr><td>Turn</td><td>One call to <code>send(prompt)</code>, including its model calls and tool calls.</td></tr>
       <tr><td>Iteration</td><td>One model request followed by the tools that the model requests.</td></tr>
       <tr><td>Tool</td><td>A named operation with an input schema. Application tools execute on the MCP server.</td></tr>
+      <tr><td>Page tool</td><td>A tool that the page script registers with <code>document.modelContext.registerTool()</code>. It runs in the page.</td></tr>
+      <tr><td>WebMCP</td><td>The browser API <code>document.modelContext</code> from the W3C draft of the same name. It has <code>registerTool()</code>, <code>getTools()</code> and <code>executeTool()</code>.</td></tr>
+      <tr><td>Shim</td><td>The file <code>web/modelcontext.js</code>. It supplies the three WebMCP methods when the browser does not have them.</td></tr>
       <tr><td>Skill</td><td>Instructions for a specific task, with optional text resources.</td></tr>
       <tr><td>Catalog</td><td>The small list of available skill names, descriptions, hashes, and resource paths.</td></tr>
       <tr><td>Compaction</td><td>The replacement of older conversation turns with a model-generated summary.</td></tr>
@@ -125,7 +129,7 @@
     </tbody>
   </table></div>
   <h3>1.3 Scope of the implementation</h3>
-  <p>The browser path has one agent and one MCP endpoint. The model chooses from the tools discovered at session creation. The skill tools run inside the harness.</p>
+  <p>The browser path has one agent and one MCP endpoint. The model chooses from three kinds of tools: the MCP tools discovered at session creation, the skill tools that run inside the harness, and the page tools that the page registers through WebMCP (section 7). The agent lists the page tools again at the start of each turn.</p>
   <p>The implementation is a loop of model calls, tool calls and compaction. It also has skills, cancellation, a restorable state, answer deltas and events. It has no retries, graph runner or plugin registry.</p>
 </section>
 
@@ -260,7 +264,7 @@ brew services stop openshell</code></pre>
   </ul>
   <p><code>tools/e2e.py</code> does not check this setup. It starts its own servers on the host.</p>
   <h3 id="rwee-gateway">3.8 Connect an mcp-rwee server</h3>
-  <p>The gateway to an <code>mcp-rwee</code> server, the map page, and their checks are in section 16. The token-cost work is in section 17.</p>
+  <p>The gateway to an <code>mcp-rwee</code> server, the map page, and their checks are in section 17. The token-cost work is in section 18.</p>
 </section>
 
 <section id="host-api">
@@ -299,6 +303,7 @@ if (result.error) {
       <tr><td><code>apiVersion</code></td><td>Optional string.</td><td>Required by the Azure adapter. It is not the MCP protocol version.</td></tr>
       <tr><td><code>chat</code></td><td>Optional function.</td><td>Replaces the HTTP model adapter with a host function. The model name is still required.</td></tr>
       <tr><td><code>contextWindow</code></td><td>Integer. Default: <code>128000</code>.</td><td>Accepted range: 1,024 to 4,294,967,295 tokens. It controls an estimated context budget.</td></tr>
+      <tr><td><code>maxModelTurns</code></td><td>Integer from 1 to 1000. Default: 50.</td><td>Sets how many model calls one turn can make. A turn that reaches the limit without a final answer stops with <code>max_model_turns</code> and commits nothing.</td></tr>
       <tr><td><code>timeoutMs</code></td><td>Integer. Default: <code>300000</code>.</td><td>Accepted range: 1 to 2,147,483,647 milliseconds. It limits HTTP silence.</td></tr>
       <tr><td><code>onEvent</code></td><td>Optional function.</td><td>Receives one event object per callback. Rust retains no event buffer.</td></tr>
       <tr><td><code>onDelta</code></td><td>Optional function.</td><td>Enables model streaming and receives non-empty answer text chunks.</td></tr>
@@ -359,7 +364,7 @@ if (result.error) {
     <thead><tr><th scope="col">Value</th><th scope="col">Meaning</th><th scope="col">Answer and commit</th></tr></thead><tbody>
       <tr><td><code>end_turn</code></td><td>The model gave a final answer.</td><td>Yes.</td></tr>
       <tr><td><code>max_output_tokens</code></td><td>The model reached its output limit. If the answer is text, the text can be incomplete. If the answer is a tool call, the call does not run, because its arguments can be incomplete.</td><td>Text: yes. Tool call: no, and the result has an error.</td></tr>
-      <tr><td><code>max_model_turns</code></td><td>The model asked for tools for ten model calls without a final answer.</td><td>No.</td></tr>
+      <tr><td><code>max_model_turns</code></td><td>The model asked for tools for <code>maxModelTurns</code> model calls (default 50) without a final answer.</td><td>No.</td></tr>
       <tr><td><code>cancelled</code></td><td>The host cancelled the turn.</td><td>No.</td></tr>
       <tr><td><code>error</code></td><td>Any other failure, including an empty answer. The <code>error</code> field has the text.</td><td>No.</td></tr>
     </tbody>
@@ -383,15 +388,16 @@ if (result.error) {
   <p>The agent adds the current prompt to the working dialog at the start of the turn. Compaction operates on that working dialog.</p>
   <p>The system message contains base instructions and a fixed reminder about untrusted tool results. It also contains the skill catalog and active skill bodies.</p>
   <h3>5.2 Model and tool sequence</h3>
+  <p>Before the loop starts, the browser binding lists the page tools with <code>getTools()</code> (section 7.3). The turn uses that list for all of its model calls. The agent adds each page tool after the MCP tools and the skill tools.</p>
   <p>The agent does these steps for each model call. The source is <code>Agent::turn</code> in <code>crates/gait-core/src/agent.rs</code>.</p>
   <ol>
     <li>It builds the system text from the base instructions, the skill catalog and the active skills.</li>
-    <li>If the turn has no summary yet, it does the compaction check (section 10.2).</li>
+    <li>If the turn has no summary yet, it does the compaction check (section 11.2).</li>
     <li>It checks that the system text, the working dialog and the tool schemas fit in the budget <code>B</code>. If they do not fit, the turn stops.</li>
     <li>It emits <code>model_start</code> and sends the request. With <code>onDelta</code>, it streams the answer text.</li>
     <li>It adds the usage to the turn total and emits <code>model_end</code>.</li>
     <li>If the response has a tool call and the finish reason is <code>length</code>, the turn stops. The call does not run.</li>
-    <li>If the response has no tool call, it commits the answer and returns (section 5.3).</li>
+    <li>If the response has no tool call, it commits the answer and returns (section 5.4).</li>
     <li>Otherwise, it runs each tool call in order and adds each result to the working dialog. Then it goes back to step 1.</li>
   </ol>
   <p>Each iteration builds a request from the current system text, working messages, and tool schemas. A context check occurs before the model call.</p>
@@ -402,15 +408,23 @@ if (result.error) {
   <p>The model selects tools. The harness does not identify arithmetic in the user prompt by itself.</p>
   <p>For example, a model can call <code>multiply</code> with <code>{"a":16,"b":0.2}</code> for a question about giving away 20% of 16 apples. The MCP server returns <code>3.2</code>. The model can then answer <code>12.8</code> apples remaining.</p>
   <p>In the demo, that multiplication executes in <code>tools/demo_server.py</code> after a <code>POST /mcp</code> request. Rust coordinates the call in the browser.</p>
-  <p>The agent stops after ten loop iterations if the model has not produced a final answer. The iteration limit is fixed. The stop reason is <code>max_model_turns</code>.</p>
+  <h3 id="turn-limit">5.3 Turn limit</h3>
+  <p>The agent stops after <code>maxModelTurns</code> model calls if the model has not produced a final answer. The stop reason is <code>max_model_turns</code>. The turn commits nothing.</p>
+  <ul>
+    <li>The default is 50 model calls. The constant is <code>MAX_MODEL_CALLS</code> in <code>agent.rs</code>.</li>
+    <li>The host sets a different limit with <code>maxModelTurns</code> in <code>GaitSession.create()</code>. The value must be an integer from 1 to 1000. Any other value stops session creation with <code>maxModelTurns must be an integer from 1 to 1000</code>.</li>
+    <li>The limit counts model calls in one turn. A compaction call is not part of the count.</li>
+    <li>Each model call sends the full working dialog again. Thus, a high limit can cost many tokens in one turn.</li>
+  </ul>
+  <pre><code class="language-js">const session = await GaitSession.create({ model, apiBase, maxModelTurns: 20 });</code></pre>
   <p>If a response ends with the finish reason <code>length</code> and contains tool calls, the agent does not run them. The turn stops with <code>max_output_tokens</code>.</p>
   <p>The agent does not send a failed model request again. A rate limit, a server error or a lost connection ends the turn with the stop reason <code>error</code>. A model proxy or the host can retry. Tool calls are never sent again, because a server action can have occurred.</p>
-  <h3>5.3 Final answer and commit</h3>
+  <h3>5.4 Final answer and commit</h3>
   <p>A response without tool calls is a final-answer candidate. The candidate must contain non-whitespace text.</p>
   <p>The agent checks cancellation before commit. On success, it commits the user prompt and final answer.</p>
   <p>The committed history is the working history before the prompt, then the prompt and the answer. If the turn made a summary, the summary replaces the older history. Successful skill activations become part of the shared scratchpad.</p>
   <p>Intermediate tool messages stay in working state. They do not become completed conversation history.</p>
-  <h3>5.4 Streamed text is provisional</h3>
+  <h3>5.5 Streamed text is provisional</h3>
   <p><code>onDelta</code> can receive text before the turn succeeds. A model can emit text before a tool call. A later operation can fail.</p>
   <p>The host should treat streamed text as provisional. The final <code>message</code> field is the committed answer.</p>
   <p>The demo removes its provisional answer when the turn ends. It then displays committed history and any error message.</p>
@@ -484,13 +498,144 @@ Mcp-Name: multiply
   <p>HTTP POST failures are not sent again. A model can still request a later tool call. Server-side safeguards must cover repeated actions.</p>
 </section>
 
+<section id="page-tools">
+  <h2>7. Expose page tools (WebMCP)</h2>
+  <p>A page tool runs in the page. It can read and change what the user sees, for example the map view or the chat messages. MCP tools stay on the server and work on data. The two kinds of tools are in the same model request.</p>
+  <p>The page registers a page tool with the WebMCP API, <code>document.modelContext</code>. <a href="#ref-webmcp">[WEBMCP]</a> The WASM agent uses the same browser API to list and call the tools. The host API has no tool option. <code>GaitSession.create()</code> rejects a <code>tools</code> property.</p>
+  <figure>
+    <a href="images/page-tools.svg"><img src="images/page-tools.svg" width="600" height="445" loading="lazy" alt="The page registers a tool. At the start of each turn the WASM agent lists the page tools with getTools and offers them to the model with the MCP and skill tools. When the model calls a page tool, the agent calls executeTool with an abort signal. The browser runs the tool in the page and returns a JSON string. The agent adds it to the dialog as a tool message. Cancel aborts the signal."></a>
+    <figcaption><strong>Figure 5.</strong> One page tool call. The browser runs the tool in the page. The agent sees only the returned text.</figcaption>
+  </figure>
+
+  <h3>7.1 Register a page tool</h3>
+  <p><strong>Precondition:</strong> The page loads the WASM module with a module script, as in section 3.</p>
+  <ol class="procedure">
+    <li>Load the shim before the application script.<pre><code class="language-html">&lt;script type=&quot;module&quot; src=&quot;./modelcontext.js&quot;&gt;&lt;/script&gt;
+&lt;script type=&quot;module&quot; src=&quot;./app.js&quot;&gt;&lt;/script&gt;</code></pre></li>
+    <li>Write a tool object with <code>name</code>, <code>description</code>, <code>inputSchema</code> and <code>execute</code>.</li>
+    <li>Call <code>registerTool()</code> with the tool object.<pre><code class="language-js">const controller = new AbortController();
+await document.modelContext.registerTool({
+  name: &quot;map_set_zoom&quot;,
+  description: &quot;Set the map zoom level (0 world to 20 street).&quot;,
+  inputSchema: { type: &quot;object&quot;, properties: { zoom: { type: &quot;number&quot; } }, required: [&quot;zoom&quot;] },
+  execute: async ({ zoom }, { signal }) =&gt; {
+    await view.goTo({ zoom });
+    return `Zoom is ${view.zoom}.`;
+  },
+}, { signal: controller.signal });</code></pre></li>
+    <li>To remove the tool, abort the controller.<pre><code class="language-js">controller.abort();</code></pre></li>
+  </ol>
+  <div class="table-wrap"><table>
+    <caption>Parts of a tool object</caption>
+    <thead><tr><th scope="col">Part</th><th scope="col">Rule</th></tr></thead><tbody>
+      <tr><td><code>name</code></td><td>Required. 1 to 128 ASCII letters, digits, dots, underscores or hyphens. It must be different from every MCP tool and skill tool name.</td></tr>
+      <tr><td><code>description</code></td><td>Required. The model reads it to select the tool. Tell the model what the tool does and what it returns.</td></tr>
+      <tr><td><code>inputSchema</code></td><td>Optional JSON Schema object. Without it, the tool has no arguments. The browser keeps it as a JSON string.</td></tr>
+      <tr><td><code>execute(input, {signal})</code></td><td>Required. An async function. It receives the arguments as an object and an <code>AbortSignal</code>.</td></tr>
+      <tr><td><code>annotations</code></td><td>Optional. The agent ignores annotations, for example <code>readOnlyHint</code> and <code>consequentialHint</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>7.2 Return a result</h3>
+  <p>The tool can return text, any JSON value, or an MCP result. The browser serializes the return value to a JSON string. The binding converts that string to text for the model.</p>
+  <div class="table-wrap"><table>
+    <caption>Return values and the text that the model receives</caption>
+    <thead><tr><th scope="col">The tool returns</th><th scope="col">The model receives</th></tr></thead><tbody>
+      <tr><td><code>"Zoom is 7."</code></td><td><code>Zoom is 7.</code></td></tr>
+      <tr><td><code>{ zoom: 7, scale: 4622324 }</code></td><td><code>{"zoom":7,"scale":4622324}</code></td></tr>
+      <tr><td><code>{ content: [{ type: "text", text: "hi" }] }</code></td><td><code>hi</code>, as for an MCP result (section 8.3).</td></tr>
+      <tr><td><code>{ structuredContent: {...} }</code></td><td>The JSON text of <code>structuredContent</code>.</td></tr>
+      <tr><td><code>{ content: [...], isError: true }</code></td><td><code>Tool error:</code> and the text.</td></tr>
+      <tr><td>A thrown error</td><td><code>Tool error:</code> and the message. Native Chrome replaces the message (section 7.6).</td></tr>
+    </tbody>
+  </table></div>
+  <p>A value without <code>content</code> or <code>structuredContent</code> is not an MCP result. The binding puts its text into one text item. Then it uses the same conversion as for MCP results. The 30,000-character limit also applies.</p>
+
+  <h3>7.3 Listing for each turn</h3>
+  <p>At the start of each <code>send()</code>, the binding calls <code>getTools()</code>. The turn uses that list for all of its model calls.</p>
+  <ul>
+    <li>A tool that the page registers between turns is in the next turn.</li>
+    <li>A tool that the page removes between turns is not in the next turn.</li>
+    <li>A change during a turn has no effect until the next turn.</li>
+    <li>If <code>getTools()</code> fails, the turn continues without page tools. The binding emits a <code>tool_rejected</code> event with the error.</li>
+    <li>If <code>getTools()</code> does not finish, <code>cancel()</code> stops the turn. The next turn works.</li>
+    <li>Without <code>document.modelContext</code>, the turn has no page tools. No event occurs.</li>
+  </ul>
+  <p>The binding skips a page tool with a <code>tool_rejected</code> event in these conditions:</p>
+  <ul>
+    <li>The name is not valid (section 8.1).</li>
+    <li>The name is the same as an MCP tool or a skill tool. The fixed tool stays.</li>
+    <li>The <code>inputSchema</code> string is not a JSON object.</li>
+  </ul>
+
+  <h3>7.4 Call and cancel</h3>
+  <ol>
+    <li>The model asks for a page tool by name.</li>
+    <li>The agent checks the arguments against the schema (section 8.2).</li>
+    <li>The binding calls <code>executeTool(tool, input, {signal})</code>.</li>
+    <li>The browser runs <code>execute</code> in the page.</li>
+    <li>The binding converts the returned string (section 7.2) and adds a tool message.</li>
+  </ol>
+  <p>Page tools run one at a time, in the order of the model's tool calls, as MCP tools do.</p>
+  <p>When the host calls <code>cancel()</code>, the agent drops the running call. The binding then aborts the signal of that call. The tool sees <code>signal.aborted</code> and can stop its work. A change that the tool already made stays.</p>
+
+  <h3>7.5 The shim</h3>
+  <p><code>web/modelcontext.js</code> runs only when <code>document.modelContext</code> is absent. It adds an object with three methods. It follows the WebMCP draft for these methods.</p>
+  <div class="table-wrap"><table>
+    <caption>Shim behavior</caption>
+    <thead><tr><th scope="col">Method</th><th scope="col">Behavior</th></tr></thead><tbody>
+      <tr><td><code>registerTool(tool, {signal})</code></td><td>Stores the tool. A tool without <code>name</code>, <code>description</code> or <code>execute</code> is a <code>TypeError</code>. A name that exists is an <code>InvalidStateError</code>. An abort of <code>signal</code> removes the tool.</td></tr>
+      <tr><td><code>getTools()</code></td><td>Returns <code>name</code>, <code>description</code> and <code>inputSchema</code> (a JSON string, or an empty string) for each tool.</td></tr>
+      <tr><td><code>executeTool(tool, input, {signal})</code></td><td>Runs <code>execute</code> with a copy of <code>input</code>. Returns the result as a JSON string. A thrown error becomes an <code>OperationError</code> with the same message. An abort becomes an <code>AbortError</code>. An unknown tool is a <code>NotFoundError</code>.</td></tr>
+    </tbody>
+  </table></div>
+  <p>The shim sets <code>shim: true</code> on its object. The browser suite reads this value to know which API it tests. The shim has no events, no frames, no <code>exposedTo</code> and no <code>fromOrigins</code>. Remove it when the target browsers have WebMCP.</p>
+
+  <h3>7.6 Native WebMCP in Chrome</h3>
+  <p>Chrome 149 and later has WebMCP as an origin trial. Edge 150 has the same trial. For local development, enable the Chrome flag <code>enable-webmcp-testing</code>.</p>
+  <ol class="procedure">
+    <li>Quit Chrome.</li>
+    <li>Start Chrome with the WebMCP features.<pre><code>&quot;/Applications/Google Chrome.app/Contents/MacOS/Google Chrome&quot; --enable-features=WebMCPTesting,WebMCP</code></pre></li>
+    <li>Open the page.</li>
+    <li>In the developer console, type <code>document.modelContext.shim</code>. The value <code>undefined</code> shows the native API. The value <code>true</code> shows the shim.</li>
+  </ol>
+  <p>Chrome 153 is different from the draft in three ways. The binding works with both.</p>
+  <div class="table-wrap"><table>
+    <caption>Chrome 153 and the WebMCP draft</caption>
+    <thead><tr><th scope="col">Item</th><th scope="col">Draft and shim</th><th scope="col">Chrome 153</th><th scope="col">What the binding does</th></tr></thead><tbody>
+      <tr><td>Input of <code>executeTool</code></td><td>An object.</td><td>A JSON string. An object fails with <code>UnknownError: Failed to parse input arguments</code>.</td><td>It sends an object. On that exact error name and message, it sends the JSON string one time. The tool did not run before the retry.</td></tr>
+      <tr><td>A thrown error</td><td>The page message.</td><td>A fixed message: <q>Tool was executed but the invocation failed</q>.</td><td>It passes the message to the model as a tool error.</td></tr>
+      <tr><td>An empty result</td><td>The JSON string of the value.</td><td>The text <code>Operation succeeded</code>.</td><td>It passes the text to the model.</td></tr>
+    </tbody>
+  </table></div>
+  <p>The retry is a marked shortcut in <code>page_tools</code> in <code>crates/gait-wasm/src/lib.rs</code>. Remove it when Chrome takes an object.</p>
+
+  <h3>7.7 Page tools in this repository</h3>
+  <div class="table-wrap"><table>
+    <caption>Registered page tools</caption>
+    <thead><tr><th scope="col">Page</th><th scope="col">Tools</th><th scope="col">Section</th></tr></thead><tbody>
+      <tr><td><code>web/index.html</code> (<code>app.js</code>)</td><td><code>page_read_messages</code>: the chat messages shown on the page, oldest first. With the scripted model, ask <q>What is on the page?</q>.</td><td>This section.</td></tr>
+      <tr><td><code>web/map.html</code> (<code>map.js</code>)</td><td>Nine <code>map_*</code> tools for files, zoom, extent, layers and clear.</td><td>Section 17.9.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>7.8 Trust and limits</h3>
+  <ul>
+    <li>A page tool has the same trust as the page script. The agent does not ask for approval.</li>
+    <li>The agent uses only tools of its own document. It does not use tools in frames or tools from other origins.</li>
+    <li>The tool list is in each model request. Many page tools cost tokens at each model call. Register only the tools that the page state needs.</li>
+    <li>Tool output is untrusted data, as for MCP results (section 8.4). A query result can contain text that asks the model to call a page tool. Make each page tool safe for that case.</li>
+  </ul>
+  <div class="caution"><p><strong>Caution:</strong> A page tool runs with the user's session in the page. Do not register a tool that does an action the user must approve, unless the tool itself asks the user.</p></div>
+</section>
+
 <section id="validation">
-  <h2>7. Validate tool arguments and results</h2>
-  <h3>7.1 Tool names</h3>
+  <h2>8. Validate tool arguments and results</h2>
+  <h3>8.1 Tool names</h3>
   <p>MCP tool names must contain 1 to 128 ASCII characters. The accepted characters are letters, digits, dots, underscores, and hyphens.</p>
   <p>Names are case-sensitive. Empty names and duplicate names stop session creation.</p>
   <p>The duplicate check includes the internal skill tool names when those tools are available.</p>
-  <h3>7.2 Browser argument checks</h3>
+  <h3>8.2 Browser argument checks</h3>
   <div class="table-wrap"><table>
     <caption>Checks before tool execution</caption>
     <thead><tr><th scope="col">Check</th><th scope="col">Example</th><th scope="col">Result on failure</th></tr></thead><tbody>
@@ -503,38 +648,38 @@ Mcp-Name: multiply
   </table></div>
   <p>The checker does not implement full JSON Schema validation. It does not recursively validate nested schemas, ranges, regular expressions, or reference resolution.</p>
   <p>The header-mirroring code separately checks the values it places in MCP headers. The server must validate the full input schema.</p>
-  <h3>7.3 Result conversion</h3>
+  <h3>8.3 Result conversion</h3>
   <p>If <code>structuredContent</code> exists, the client serializes that value as JSON text. Otherwise, it joins the returned text fields with newlines.</p>
   <p>Content items without a text field produce <code>[non-text MCP content omitted]</code>. The client does not decode images or audio.</p>
   <p>Tool output longer than 30,000 Rust characters keeps a 22,500-character head and a 7,500-character tail. A marker reports the removed character count.</p>
   <p>The marker adds characters beyond the retained-content limit. The limit applies after conversion of the tool result.</p>
-  <h3>7.4 Trust rules</h3>
+  <h3>8.4 Trust rules</h3>
   <p>Tool output is data from an external operation. It must not become authority to change the agent's instructions.</p>
   <p>The system text contains a reminder about this rule. That reminder is not an access-control mechanism.</p>
   <p>The server must check permissions before it performs an action. It must also validate inputs after any intermediary has handled the request.</p>
 </section>
 
 <section id="skills">
-  <h2>8. Load and disclose skills</h2>
+  <h2>9. Load and disclose skills</h2>
   <p>Progressive disclosure keeps the initial context small. The model sees task descriptions before it sees full instructions. <a href="#ref-skills-client">[SKILLS-CLIENT]</a></p>
   <figure>
     <a href="images/skill-tiers.svg"><img src="images/skill-tiers.svg" width="720" height="380" loading="lazy" alt="The catalog loads first. activate_skill loads one instruction body. read_skill_resource loads one listed file of an active skill."></a>
-    <figcaption><strong>Figure 5.</strong> The catalog, instructions, and resources have separate loading points.</figcaption>
+    <figcaption><strong>Figure 6.</strong> The catalog, instructions, and resources have separate loading points.</figcaption>
   </figure>
-  <h3>8.1 Catalog</h3>
+  <h3>9.1 Catalog</h3>
   <p><code>kb.json</code> contains the base instructions and skill metadata. It does not contain the full bodies of model-invocable skills.</p>
   <p>The Rust catalog uses sorted skill names. The model receives the catalog in the system message.</p>
   <p>If the catalog is empty, the harness adds no skill tools. MCP tools can still run.</p>
-  <h3>8.2 Activation</h3>
+  <h3>9.2 Activation</h3>
   <p>The model calls <code>activate_skill</code> with one catalog name. The harness fetches <code>instructions.md</code> for that skill.</p>
   <p>The activation result tells the model that the skill is active. It also lists resource paths.</p>
   <p>The next model request contains the active body in a <code>&lt;skill_content&gt;</code> block. The harness does not repeat the full body in the activation tool result.</p>
   <p>An activation becomes shared session state only when the turn succeeds. A failed turn discards its uncommitted activation changes.</p>
-  <h3>8.3 Resources</h3>
+  <h3>9.3 Resources</h3>
   <p>The model calls <code>read_skill_resource</code> with a name and path. The skill must be active for its current hash.</p>
   <p>The path must exactly match one catalog resource. The model cannot select another file through this tool.</p>
   <p>The loader accepts UTF-8 text. It retains the first 16,000 Rust characters of a longer resource and adds a truncation marker.</p>
-  <h3>8.4 Activation state and cache</h3>
+  <h3>9.4 Activation state and cache</h3>
   <pre><code class="language-json">{
   &quot;active_skills&quot;: [
     {
@@ -548,15 +693,15 @@ Mcp-Name: multiply
   <p>A changed catalog hash invalidates an old activation. The model must activate the changed skill again.</p>
   <p>The in-memory cache holds at most eight bodies. It is separate from the saved activation records.</p>
   <p>The hash detects a changed skill version for activation purposes. It is not a digital signature or a server trust certificate.</p>
-  <h3>8.5 Limits</h3>
+  <h3>9.5 Limits</h3>
   <p>At most eight skills can be active. A body longer than 16,000 Rust characters is rejected. Its instructions are not silently truncated.</p>
   <p>Rust character counts use Unicode scalar values. They are not visual letter counts or JavaScript UTF-16 lengths.</p>
   <p>The harness treats instruction bodies as plain text. It does not render Mustache expressions or execute skill scripts.</p>
 </section>
 
 <section id="export">
-  <h2>9. Prepare a skill bundle</h2>
-  <h3>9.1 Source structure</h3>
+  <h2>10. Prepare a skill bundle</h2>
+  <h3>10.1 Source structure</h3>
   <pre><code>source/
 └── skills/
     ├── ChatAgent/
@@ -581,7 +726,7 @@ Call the registered multiply tool with the value and factor.
 State the result and the destination unit.</code></pre>
   <p>The source folder name becomes the runtime skill name. The exporter accepts letters, digits, underscores, and hyphens in that folder name.</p>
   <p>Lowercase letters and hyphens follow the normal Agent Skills naming convention. This repository also has its own export rules. <a href="#ref-skills-spec">[SKILLS-SPEC]</a></p>
-  <h3>9.2 Generated structure</h3>
+  <h3>10.2 Generated structure</h3>
   <pre><code>kb/
 ├── kb.json
 └── skills/
@@ -604,7 +749,7 @@ State the result and the destination unit.</code></pre>
 }</code></pre>
   <p>The example hash is illustrative. The exporter computes the actual value from the body, resource paths, and resource bytes.</p>
   <p>The value is the first 16 hexadecimal characters of a SHA-256 digest. Descriptions remain in the catalog.</p>
-  <h3>9.3 Export rules</h3>
+  <h3>10.3 Export rules</h3>
   <ul>
     <li>Only opted-in skills enter the invocable catalog.</li>
     <li>Only files under <code>references/</code>, <code>assets/</code>, and <code>resources/</code> become resources.</li>
@@ -615,7 +760,7 @@ State the result and the destination unit.</code></pre>
     <li>The generated skills directory must not be a symlink.</li>
   </ul>
   <aside class="caution"><p><strong>Generated ownership:</strong> The exporter replaces generated skill folders. It also removes folders for skills listed in the previous catalog but absent from the new catalog.</p><p>Keep hand-maintained files outside generated skill folders. The export is not an atomic deployment transaction.</p></aside>
-  <h3>9.4 Export a changed bundle</h3>
+  <h3>10.4 Export a changed bundle</h3>
   <p><strong>Precondition:</strong> The source contains valid UTF-8 skill files. The destination is a generated output folder.</p>
   <ol class="procedure">
     <li>Update the required source skill file.</li>
@@ -629,13 +774,13 @@ State the result and the destination unit.</code></pre>
 </section>
 
 <section id="context">
-  <h2>10. Control the context budget</h2>
+  <h2>11. Control the context budget</h2>
   <p>The context window limits the text sent to the model and the room reserved for its response. The harness estimates tokens from serialized text.</p>
   <figure>
     <a href="images/context-budget.svg"><img src="images/context-budget.svg" width="600" height="245" loading="lazy" alt="The context window holds the overhead of system text and tool schemas, the working dialog and a reserve. Before each model call the agent summarizes earlier turns once if the dialog is over budget."></a>
-    <figcaption><strong>Figure 6.</strong> The context budget includes instructions and tool schemas. This diagram is not to scale.</figcaption>
+    <figcaption><strong>Figure 7.</strong> The context budget includes instructions and tool schemas. This diagram is not to scale.</figcaption>
   </figure>
-  <h3>10.1 Browser defaults</h3>
+  <h3>11.1 Browser defaults</h3>
   <div class="table-wrap"><table>
     <caption>Context values used by the browser binding</caption>
     <thead><tr><th scope="col">Value</th><th scope="col">Definition</th><th scope="col">Default at 128,000 tokens</th></tr></thead><tbody>
@@ -657,14 +802,14 @@ State the result and the destination unit.</code></pre>
     </tbody>
   </table></div>
   <p>In this example, a working dialog of more than 1,236 tokens starts one summary. The browser test <code>compaction</code> in <code>tools/e2e.py</code> uses this window size.</p>
-  <h3>10.2 Before each model call</h3>
+  <h3>11.2 Before each model call</h3>
   <p>Before each model call, the agent estimates the overhead from the system message and the tool schemas. The diagram calls this value <code>O</code>.</p>
   <p>If the working dialog, including the current prompt and its tool results, is larger than approximately <code>W − O − R</code>, the agent makes one summary. A turn makes at most one summary.</p>
   <p>If the request is still larger than <code>B</code> after that, the turn stops before it calls the model. Nothing is committed.</p>
-  <h3>10.3 Summary behavior</h3>
+  <h3>11.3 Summary behavior</h3>
   <figure>
     <a href="images/compaction.svg"><img src="images/compaction.svg" width="600" height="275" loading="lazy" alt="Earlier turns become one summary system message. The current turn, from its user message onward, stays word for word. The cut is always at a user message."></a>
-    <figcaption><strong>Figure 7.</strong> The summary replaces the earlier turns. The current turn does not change.</figcaption>
+    <figcaption><strong>Figure 8.</strong> The summary replaces the earlier turns. The current turn does not change.</figcaption>
   </figure>
   <p>The compaction code finds a boundary between user turns. It does not split a retained turn. The current turn, from its prompt onward, is always kept word for word.</p>
   <p>The retained-history target is also limited to half of the adjusted history budget. A small context window therefore leaves room for a summary.</p>
@@ -673,7 +818,7 @@ State the result and the destination unit.</code></pre>
   <p>A failed or empty summary leaves the working history intact. The later budget check can still reject a request that remains too large.</p>
   <p>A successful summary call contributes to returned usage. It emits model events with <code>purpose: "compaction"</code>.</p>
   <p>The summary prompt tells the model to keep names, numbers, decisions and open questions. If the transcript starts with an earlier summary, the model merges it.</p>
-  <h3>10.4 During the loop</h3>
+  <h3>11.4 During the loop</h3>
   <p>Each iteration recomputes the system text. A newly activated skill can increase its size.</p>
   <p>The agent checks all request messages and tool schemas against <code>B</code>. Tool results count because they are part of working history.</p>
   <p>A turn makes at most one summary. Thus, a summary is never summarized again in the same turn, and the number of model calls stays bounded. If the provider rejects a request as too long, the turn fails. Select a smaller <code>contextWindow</code> so that the estimate starts compaction first.</p>
@@ -682,19 +827,19 @@ State the result and the destination unit.</code></pre>
 </section>
 
 <section id="state">
-  <h2>11. Save and restore state</h2>
+  <h2>12. Save and restore state</h2>
   <p>The harness keeps state in memory. The host saves it and gives it back. The harness does not write to storage itself.</p>
   <figure>
     <a href="images/session-state.svg"><img src="images/session-state.svg" width="600" height="240" loading="lazy" alt="The page passes the saved value to create, runs turns, reads state and saves it in localStorage after each turn. A reload restores it. Clear removes the saved value and empties the session."></a>
-    <figcaption><strong>Figure 8.</strong> The host saves <code>state()</code> after each turn and passes it back to <code>create()</code>.</figcaption>
+    <figcaption><strong>Figure 9.</strong> The host saves <code>state()</code> after each turn and passes it back to <code>create()</code>.</figcaption>
   </figure>
-  <h3>11.1 State contents</h3>
+  <h3>12.1 State contents</h3>
   <ul>
     <li><code>dialog</code>: the completed user prompts and final answers. It can also contain a summary system message.</li>
     <li><code>scratchpad</code>: a JSON object. The harness writes active skill names and hashes there.</li>
   </ul>
   <p>Model configuration credentials are not part of the state. User text and answers can contain sensitive data. Select the storage for that data.</p>
-  <h3>11.2 Save and restore a session</h3>
+  <h3>12.2 Save and restore a session</h3>
   <ol class="procedure">
     <li>After each <code>send()</code>, call <code>session.state()</code>.</li>
     <li>Save the value, for example with <code>localStorage.setItem(key, JSON.stringify(value))</code>.</li>
@@ -702,9 +847,9 @@ State the result and the destination unit.</code></pre>
     <li>Pass the value as <code>state</code> to <code>GaitSession.create()</code>.</li>
   </ol>
   <p>An activation in the scratchpad stays valid while its skill hash is the same. After a skill changes, the model activates it again.</p>
-  <h3>11.3 Damaged saved state</h3>
+  <h3>12.3 Damaged saved state</h3>
   <p>The binding checks that <code>dialog</code> is a list of messages and that <code>scratchpad</code> is an object. If a check fails, <code>create()</code> rejects with an error that starts with <code>JSON error: state.</code>. The harness does not start an empty session in its place, because that would hide the problem.</p>
-  <h3>11.4 Demo and map page behavior</h3>
+  <h3>12.4 Demo and map page behavior</h3>
   <ul>
     <li>The demo page saves in <code>localStorage</code> under <code>gait-demo-state</code>. The map page uses <code>gait-map-state</code>.</li>
     <li>Each page saves after each turn. If the save fails, the status line shows the error.</li>
@@ -715,14 +860,14 @@ State the result and the destination unit.</code></pre>
 </section>
 
 <section id="cancel">
-  <h2>12. Cancel a turn and clear a session</h2>
-  <h3>12.1 Cancellation mechanism</h3>
+  <h2>13. Cancel a turn and clear a session</h2>
+  <h3>13.1 Cancellation mechanism</h3>
   <p><code>cancel()</code> sets a shared switch and wakes waiting Rust futures. The waiting operation returns the cancellation error.</p>
   <p>Dropping an in-flight Fetch future drops its abort guard. The guard calls <code>AbortController.abort()</code>.</p>
   <p>The custom JavaScript model receives an <code>AbortSignal</code>. Its implementation should stop its own work when the signal is aborted. <a href="#ref-abort">[ABORT]</a></p>
   <p>Uncommitted dialog and activation changes are discarded. A later send uses a new cancellation switch.</p>
   <p>Cancellation does not undo a completed server action.</p>
-  <h3>12.2 Cancel a running turn</h3>
+  <h3>13.2 Cancel a running turn</h3>
   <ol class="procedure">
     <li>Call <code>session.cancel()</code>.</li>
     <li>Await the running <code>send()</code> promise.</li>
@@ -730,7 +875,7 @@ State the result and the destination unit.</code></pre>
     <li>Remove provisional answer text from the display.</li>
   </ol>
   <p>If the host cancels after the turn has committed, the result can still report success.</p>
-  <h3>12.3 Clear a session</h3>
+  <h3>13.3 Clear a session</h3>
   <p><strong>Precondition:</strong> No send or clear operation is running.</p>
   <ol class="procedure">
     <li>Call <code>session.clear()</code>.</li>
@@ -739,19 +884,19 @@ State the result and the destination unit.</code></pre>
   </ol>
   <p>A successful clear empties the dialog and scratchpad. It emits a <code>clear</code> event. <code>clear()</code> does not change host storage. The host removes its saved value itself.</p>
   <p>The demo uses that event to clear its retained trace. A host application must implement its own display and retention response.</p>
-  <h3>12.4 Reconnect behavior</h3>
+  <h3>13.4 Reconnect behavior</h3>
   <p>The demo numbers connection attempts. A stale result cannot replace a newer connection.</p>
   <p>The demo frees the wrapper returned by a stale attempt. It also ignores that attempt's event callback.</p>
   <p>Settings are disabled during an active UI turn. These UI controls supplement the binding's concurrent-operation check.</p>
 </section>
 
 <section id="events">
-  <h2>13. Observe the agent</h2>
+  <h2>14. Observe the agent</h2>
   <figure>
     <a href="images/observability.svg"><img src="images/observability.svg" width="720" height="310" loading="lazy" alt="Rust sends events to an onEvent callback. The host renders, redacts, retains, and exports them. Rust has no retained event buffer."></a>
-    <figcaption><strong>Figure 9.</strong> The host owns event storage and display. Observability does not add a policy-hook system.</figcaption>
+    <figcaption><strong>Figure 10.</strong> The host owns event storage and display. Observability does not add a policy-hook system.</figcaption>
   </figure>
-  <h3>13.1 Event object</h3>
+  <h3>14.1 Event object</h3>
   <pre><code class="language-json">{
   &quot;ts_ms&quot;: 1794000000000,
   &quot;run_id&quot;: &quot;turn-1&quot;,
@@ -773,7 +918,7 @@ State the result and the destination unit.</code></pre>
   </table></div>
   <p>A turn number is local to a session instance. It is not a globally unique request ID.</p>
   <p>Wall-clock values can change if the system clock changes. Use a host monotonic timer for local duration measurements.</p>
-  <h3>13.2 Event categories</h3>
+  <h3>14.2 Event categories</h3>
   <div class="table-wrap"><table>
     <caption>Emitted events and their contents</caption>
     <thead><tr><th scope="col">Category</th><th scope="col">When emitted</th><th scope="col">Main contents</th></tr></thead><tbody>
@@ -793,12 +938,12 @@ State the result and the destination unit.</code></pre>
   <p>Events describe progress, not a strict balanced-span protocol. A cancelled model call can have <code>model_start</code> without <code>model_end</code>.</p>
   <p><code>tool_end</code> does not prove tool success. Tool errors can return to the model without failing the whole turn.</p>
   <p>A <code>compaction</code> event describes working state. A later failure can prevent that state from being committed.</p>
-  <h3>13.3 Callback behavior</h3>
+  <h3>14.3 Callback behavior</h3>
   <p><code>onEvent</code> is an observer. Its return value does not approve, rewrite, or block an action.</p>
   <p>The callback runs synchronously on the JavaScript thread. Rust catches a thrown callback error and reports it to the browser console.</p>
   <p>The harness does not await a promise returned by <code>onEvent</code>. The host must handle asynchronous callback work and promise failures.</p>
   <p>A slow callback delays the agent. The callback should perform only short work before it schedules any larger update.</p>
-  <h3>13.4 Host retention</h3>
+  <h3>14.4 Host retention</h3>
   <p>Rust retains no event list. If no callback exists, no retained trace is created.</p>
   <p>The demo stores at most 200 events and 262,144 serialized text characters. It also limits long messages before display and export.</p>
   <p>The demo displays the tool name and its argument values in each <code>tool_start</code> row. For example: <code>multiply {"a":16,"b":0.2}</code>.</p>
@@ -808,15 +953,15 @@ State the result and the destination unit.</code></pre>
   <p>This redaction uses field names and text patterns. It cannot identify all domain-specific sensitive information. A custom host must apply its own data classification before it stores raw events.</p>
   <p>The host must choose its own retention and redaction rules. Prompt text, model text, and tool arguments can contain sensitive data.</p>
   <p>The harness does not provide <code>traceJsonl()</code>. A host can serialize selected events as JSON Lines.</p>
-  <h3>13.5 Answer deltas</h3>
+  <h3>14.5 Answer deltas</h3>
   <p><code>onDelta(text)</code> receives answer text from the model adapter. It does not receive MCP tool output as an answer stream.</p>
   <p>Without <code>onDelta</code>, HTTP model calls use the non-streaming adapter path.</p>
   <p>The demo schedules at most one visual text update per animation frame. It replaces provisional text with the final result after the turn.</p>
 </section>
 
 <section id="models">
-  <h2>14. Connect a model</h2>
-  <h3>14.1 Provider selection</h3>
+  <h2>15. Connect a model</h2>
+  <h3>15.1 Provider selection</h3>
   <div class="table-wrap"><table>
     <caption>Model name prefixes</caption>
     <thead><tr><th scope="col">Prefix</th><th scope="col">Adapter</th><th scope="col">Default base or requirement</th></tr></thead><tbody>
@@ -831,15 +976,15 @@ State the result and the destination unit.</code></pre>
   </table></div>
   <p>The selected model must support tool calls for tool tasks. Model availability and tool support depend on the actual provider.</p>
   <p>The adapters translate requests and results. They do not supply model weights or an in-browser inference engine.</p>
-  <h3>14.2 OpenAI-compatible routes</h3>
+  <h3>15.2 OpenAI-compatible routes</h3>
   <p>The adapter appends <code>/chat/completions</code> to the API base. A supplied key becomes an Authorization bearer header. <a href="#ref-openai-chat">[OPENAI-CHAT]</a> <a href="#ref-openrouter">[OPENROUTER]</a></p>
   <p>The Azure route uses <code>/openai/deployments/&lt;deployment&gt;/chat/completions</code>. It adds the <code>api-version</code> query parameter and an <code>api-key</code> header when configured. <a href="#ref-azure">[AZURE-OPENAI]</a></p>
   <p>The provider prefix is removed from the model name sent to the adapter. A proxy can normalize provider differences behind the OpenAI-compatible wire format.</p>
-  <h3>14.3 Usage and the prompt cache</h3>
+  <h3>15.3 Usage and the prompt cache</h3>
   <p>The adapter returns provider usage. It reads <code>prompt_tokens_details.cached_tokens</code> as <code>cached_tokens</code>. If that field is absent, it keeps a top-level <code>cached_tokens</code>. <a href="#ref-openai-cache">[OPENAI-CACHE]</a></p>
   <p>There is no native Anthropic adapter. To use an Anthropic model, use an OpenAI-compatible route, for example a LiteLLM proxy, with <code>apiBase</code>.</p>
   <p>These adapter details were checked with local fixtures. This documentation does not establish live provider compatibility.</p>
-  <h3>14.4 Host-supplied model function</h3>
+  <h3>15.4 Host-supplied model function</h3>
   <pre><code class="language-javascript">const session = await GaitSession.create({
   model: &quot;host/local-model&quot;,
   kbUrl: &quot;kb&quot;,
@@ -869,11 +1014,11 @@ State the result and the destination unit.</code></pre>
   }
 }</code></pre>
   <p>The callback can return a value or a promise. The response uses the normalized chat-response shape.</p>
-  <p>The request contains <code>messages</code>, <code>tools</code>, and <code>params</code>. Tool definitions use the OpenAI function shape. The callback receives a separate <code>AbortSignal</code> argument.</p>
+  <p>The request contains <code>messages</code> and <code>tools</code>. Tool definitions use the OpenAI function shape. The callback receives a separate <code>AbortSignal</code> argument.</p>
   <p>For tool calls, the response contains an assistant message with <code>tool_calls</code>. Each call includes an ID, function name, and JSON argument string.</p>
   <p>A custom model must implement its own engine cancellation. The HTTP silence timeout is not a timeout for the custom callback.</p>
   <p>The default stream fallback emits the completed custom-model answer as one delta. A custom callback does not receive a token-stream callback argument.</p>
-  <h3>14.5 Optional Azure development proxy</h3>
+  <h3>15.5 Optional Azure development proxy</h3>
   <p><code>tools/dev_proxy.py</code> is a local development tool. It reads <code>AZURE_API_BASE</code> and <code>AZURE_API_KEY</code> from its environment.</p>
   <p>Its default page origin is <code>http://localhost:8080</code>. Its default listen address is <code>127.0.0.1:8787</code>.</p>
   <ol class="procedure">
@@ -887,8 +1032,8 @@ State the result and the destination unit.</code></pre>
 </section>
 
 <section id="deploy">
-  <h2>15. Deploy the host application</h2>
-  <h3>15.1 Required server layout</h3>
+  <h2>16. Deploy the host application</h2>
+  <h3>16.1 Required server layout</h3>
   <pre><code>Static assets:
   /index.html
   /app.js
@@ -903,7 +1048,7 @@ Server routes:
   /llm/v1/chat/completions    Optional model proxy</code></pre>
   <p>The MCP and skill URLs must resolve to the page origin. <code>https://app.example.test</code> and <code>https://app.example.test:8443</code> are different origins.</p>
   <p>A model proxy is recommended when the deployment must keep provider keys on the server. The model API base and MCP endpoint are separate routes.</p>
-  <h3>15.2 Deployment procedure</h3>
+  <h3>16.2 Deployment procedure</h3>
   <p><strong>Precondition:</strong> The host server provides authenticated MCP tools using revision <code>2026-07-28</code>.</p>
   <ol class="procedure">
     <li>Build the release package.</li>
@@ -916,32 +1061,32 @@ Server routes:
   </ol>
   <p>The static server must serve the WASM file correctly. Use <code>application/wasm</code> for the WASM response.</p>
   <p>The generated JavaScript and the WASM file must come from the same build. Relative imports must resolve from the JavaScript module location.</p>
-  <h3>15.3 Authentication and authorization</h3>
+  <h3>16.3 Authentication and authorization</h3>
   <p>Same-origin Fetch can send the browser's applicable cookies. This behavior does not prove that the user is authorized. <a href="#ref-credentials">[CREDENTIALS]</a></p>
   <p>The MCP server must verify authentication, Origin, input schema, and action permissions. It must also enforce any confirmation required for a destructive action.</p>
   <p>This client does not display elicitation or approval forms from MCP. Complete those interactions in the host application and server flow.</p>
   <p>The server must handle repeated requests safely. A lost response does not prove that a tool action failed.</p>
-  <h3>15.4 Content Security Policy</h3>
+  <h3>16.4 Content Security Policy</h3>
   <p>The demo policy permits its own origin, selected local model ports, and named provider hosts. It also permits WASM compilation through <code>wasm-unsafe-eval</code>.</p>
   <p>A new direct model host needs permission in <code>connect-src</code>. Its own server must also permit the browser request through CORS.</p>
   <p>A same-origin model proxy reduces the required browser destinations. The host should restrict its policy to the routes that its deployment needs.</p>
-  <h3>15.5 Release and cache consistency</h3>
+  <h3>16.5 Release and cache consistency</h3>
   <p>Publish generated assets as a consistent release. The exporter can replace files in several operations.</p>
   <p>The catalog and instruction files must agree. Cache configuration is part of the server deployment.</p>
   <p>The harness does not verify a skill body's digest after download. It uses the catalog hash to validate activation records in the scratchpad.</p>
 </section>
 
 <section id="rwee">
-  <h2>16. Connect mcp-rwee and the map page</h2>
+  <h2>17. Connect mcp-rwee and the map page</h2>
   <p><code>mcp-rwee</code> is an MCP server. It runs Python on a machine that has ArcGIS Pro or DuckDB. <a href="#ref-mcp-rwee">[MCP-RWEE]</a> It uses FastMCP and Starlette. <a href="#ref-fastmcp">[FASTMCP]</a> <a href="#ref-starlette">[STARLETTE]</a> Each request to it needs a Bearer token.</p>
   <p>The browser page cannot hold that token. The page sends only same-origin cookies. Thus, a gateway, <code>tools/gateway.py</code>, sits between the page and <code>mcp-rwee</code>. The gateway holds the token. The token never goes to the browser.</p>
   <p>The map page, <code>web/map.html</code>, runs the same WASM agent as the demo page. It shows the result of a query on a map from the ArcGIS Maps SDK for JavaScript 5.2. <a href="#ref-arcgis-sdk">[ARCGIS-SDK]</a></p>
   <figure>
     <a href="images/gateway.svg"><img src="images/gateway.svg" width="600" height="360" loading="lazy" alt="The map page and the WASM agent call the gateway on the same origin. The gateway checks arguments, adds the token and relays tool calls and map files from mcp-rwee. Model requests go to the model proxy."></a>
-    <figcaption><strong>Figure 10.</strong> The gateway is the only part that holds the <code>mcp-rwee</code> token. The model proxy is the only part that holds the model key.</figcaption>
+    <figcaption><strong>Figure 11.</strong> The gateway is the only part that holds the <code>mcp-rwee</code> token. The model proxy is the only part that holds the model key.</figcaption>
   </figure>
 
-  <h3>16.1 Components</h3>
+  <h3>17.1 Components</h3>
   <div class="table-wrap"><table>
     <caption>Parts of the map setup</caption>
     <thead><tr><th scope="col">Part</th><th scope="col">Runs on</th><th scope="col">Function</th></tr></thead><tbody>
@@ -950,11 +1095,11 @@ Server routes:
       <tr><td><code>tools/gateway.py</code></td><td>Host, <code>127.0.0.1</code></td><td>Serves <code>web/</code>. Relays <code>/mcp</code> and <code>/artifacts/...</code>. Adds the token and checks arguments. Standard library only.</td></tr>
       <tr><td><code>tools/narrow.py</code></td><td><code>mcp-rwee</code> machine</td><td>The fixed script for <code>narrow</code> mode. It runs SQL in locked-down DuckDB and writes the map files. It needs <code>duckdb</code> on that machine.</td></tr>
       <tr><td><code>mcp-rwee</code></td><td>Upstream machine</td><td>Tools <code>read</code>, <code>write</code>, <code>edit</code> and <code>execute</code>. A per-run artifact folder for output files.</td></tr>
-      <tr><td><code>tools/dev_proxy.py</code></td><td>Host, port 8787</td><td>The optional Azure model proxy. It holds the model key. See section 14.5.</td></tr>
+      <tr><td><code>tools/dev_proxy.py</code></td><td>Host, port 8787</td><td>The optional Azure model proxy. It holds the model key. See section 15.5.</td></tr>
     </tbody>
   </table></div>
 
-  <h3>16.2 Gateway modes</h3>
+  <h3>17.2 Gateway modes</h3>
   <p>The registration in the configuration file sets the <code>mode</code>. The default is <code>narrow</code>.</p>
   <div class="table-wrap"><table>
     <caption>Gateway modes</caption>
@@ -965,14 +1110,14 @@ Server routes:
   </table></div>
   <div class="caution"><p><strong>Caution:</strong> In <code>passthrough</code> mode the model can run any code on the upstream machine. Use this mode only on a trusted network with trusted users.</p></div>
 
-  <h3>16.3 Gateway checks</h3>
+  <h3>17.3 Gateway checks</h3>
   <p>The gateway does these checks before it sends a request to the upstream:</p>
   <ul>
     <li><strong>Host and Origin:</strong> The <code>Host</code> header must be <code>localhost</code> or <code>127.0.0.1</code>. A <code>POST /mcp</code> must also have <code>Origin</code> equal to <code>http://</code> plus that host. This blocks DNS rebinding and calls from other web pages.</li>
     <li><strong>Body:</strong> A <code>POST /mcp</code> must have a numeric <code>Content-Length</code> from 1 byte to 1 MiB. A missing or non-numeric length gets HTTP 411.</li>
     <li><strong>Protocol:</strong> The headers <code>MCP-Protocol-Version: 2026-07-28</code> and <code>Mcp-Method</code> must agree with the JSON body. <a href="#ref-mcp-http">[MCP-HTTP]</a></li>
     <li><strong>Tool name:</strong> In <code>narrow</code> mode, a call to any other tool fails. The upstream does not receive it.</li>
-    <li><strong>Arguments:</strong> See the limits in section 16.4.</li>
+    <li><strong>Arguments:</strong> See the limits in section 17.4.</li>
     <li><strong>Format:</strong> The header <code>X-Gait-Format</code> must be <code>geojson</code> or <code>parquet</code>. If it is absent, the format is <code>geojson</code>.</li>
   </ul>
   <p>The gateway also protects the token:</p>
@@ -983,11 +1128,11 @@ Server routes:
     <li>The gateway binds to <code>127.0.0.1</code>. It has no user authentication. Put your own authentication in front of it before you expose it.</li>
   </ul>
 
-  <h3>16.4 Narrow tools</h3>
+  <h3>17.4 Narrow tools</h3>
   <div class="table-wrap"><table>
     <caption>Tools in narrow mode</caption>
     <thead><tr><th scope="col">Tool</th><th scope="col">Arguments</th><th scope="col">Result</th></tr></thead><tbody>
-      <tr><td><code>NAME_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table (section 17.1). With a table: the full metadata of that table.</td></tr>
+      <tr><td><code>NAME_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table (section 18.1). With a table: the full metadata of that table.</td></tr>
       <tr><td><code>NAME_query</code></td><td>Either <code>sql</code>, or <code>queries</code> with 1 to 6 items. Each item has a <code>name</code> and a <code>sql</code>. A name matches <code>^[a-z][a-z0-9_]{0,31}$</code>. Names are unique. Each SQL string has 1 to 20,000 characters.</td><td>A JSON object with one entry in <code>layers</code> for each query. A single <code>sql</code> gets the name <code>result</code>. After the JSON, a <code>files:</code> list gives the URL of each map file.</td></tr>
     </tbody>
   </table></div>
@@ -1006,7 +1151,7 @@ Server routes:
   </table></div>
   <p>The script prints compact JSON.</p>
 
-  <h3>16.5 DuckDB lockdown</h3>
+  <h3>17.5 DuckDB lockdown</h3>
   <p>In <code>narrow</code> mode, the model writes SQL. The SQL must not read or change anything outside the database. The script applies these settings in this order before it runs any model SQL. <a href="#ref-duckdb-secure">[DUCKDB-SECURE]</a> <a href="#ref-duckdb-config">[DUCKDB-CONFIG]</a></p>
   <ol>
     <li>It opens the database with <code>read_only=True</code>. No SQL can change the data.</li>
@@ -1015,13 +1160,26 @@ Server routes:
     <li>It sets <code>enable_external_access = false</code>. SQL cannot read other files, attach a database, or open a network connection.</li>
     <li>It sets <code>lock_configuration = true</code>. SQL cannot change these settings back.</li>
   </ol>
+  <p>The script runs each query of the model one time:</p>
+  <ol>
+    <li>It reads the column types with <code>DESCRIBE</code>. <code>DESCRIBE</code> does not run the query.</li>
+    <li>It runs the query into a temporary table: <code>CREATE OR REPLACE TEMP TABLE result AS SELECT * FROM (SQL) LIMIT 100001</code>.</li>
+    <li>For GeoParquet, it writes the file with <code>COPY</code> from that table, with at most 100,000 rows.</li>
+    <li>It reads the rows from that table for the JSON output, the statistics and the GeoJSON file.</li>
+  </ol>
+  <p>A 100,001st row shows that the result has more rows. The script then sets <code>truncated</code> to true. The output and the file keep 100,000 rows.</p>
+  <p>A read-only DuckDB connection accepts a temporary table, because the table is in memory only. A <code>CREATE TABLE</code> in the database still fails. The test <code>test_geoparquet_runs_the_query_once_and_marks_a_cut</code> selects <code>random()</code>. The value in the file and the value in the output must be the same. A second run of the query would give a different value.</p>
+  <figure>
+    <a href="images/narrow-once.svg"><img src="images/narrow-once.svg" width="600" height="345" loading="lazy" alt="narrow.py reads the column types with DESCRIBE, which does not run the query. It then runs the model SQL once into a temporary table with at most 100,001 rows. The GeoParquet file is a COPY from that table with 100,000 rows. The rows for the JSON sample, the statistics and the GeoJSON file come from the same table. A 100,001st row marks the result as truncated. The database is read-only and locked."></a>
+    <figcaption><strong>Figure 12.</strong> One run of the model SQL gives the rows and the map file.</figcaption>
+  </figure>
   <p>A check with <code>SELECT * FROM read_csv('/etc/hosts')</code> failed with <code>PermissionException</code>. <code>tools/test_narrow.py</code> tries 7 SQL strings that try to leave the sandbox. All 7 fail.</p>
 
-  <h3>16.6 Map files in one format</h3>
+  <h3>17.6 Map files in one format</h3>
   <p>A query result with a GEOMETRY column gets one map file. The page selects the format. The model does not select it.</p>
   <figure>
     <a href="images/map-format.svg"><img src="images/map-format.svg" width="600" height="255" loading="lazy" alt="The page sends its format in a header. The gateway checks it and passes it to narrow.py, which writes only that file. The page draws the file with the matching layer and reads it through the gateway."></a>
-    <figcaption><strong>Figure 11.</strong> One question gives one file for each layer, in the format that the page selected.</figcaption>
+    <figcaption><strong>Figure 13.</strong> One question gives one file for each layer, in the format that the page selected.</figcaption>
   </figure>
   <div class="table-wrap"><table>
     <caption>The two map file formats</caption>
@@ -1034,7 +1192,7 @@ Server routes:
   <p>The page draws each layer in one color. A numeric result column with the name <code>color</code> changes this. The page then colors each feature by that value, with the <code>min</code> and <code>max</code> from <code>stats</code> as the ends of the ramp. If the values are on the two sides of 0, for example z-scores, the ramp goes from blue through gray to orange, with gray at 0. Other values go from blue (low) to orange (high). The layer list shows the ramp as the swatch. The skill of the dataset tells the model when to add this column.</p>
   <p><code>ParquetLayer</code> first sends <code>HEAD</code> to get the size. Then it sends <code>GET</code> with a <code>Range</code> header. <a href="#ref-range">[RANGE]</a> The gateway sends <code>HEAD</code> and <code>Range</code> to the upstream unchanged. It returns <code>Content-Range</code>, <code>Accept-Ranges</code> and <code>Content-Length</code>. It adds <code>Content-Disposition: attachment</code> and <code>X-Content-Type-Options: nosniff</code>.</p>
 
-  <h3>16.7 Configure and start the gateway</h3>
+  <h3>17.7 Configure and start the gateway</h3>
   <p><strong>Precondition:</strong> You completed section 3.4, steps 1 and 2. The <code>mcp-rwee</code> server runs with DuckDB. Its token is in the variable <code>MCP_RWEE_TOKEN</code>.</p>
   <ol class="procedure">
     <li>Start <code>mcp-rwee</code> on the upstream machine.<pre><code>uv run --with duckdb server.py --prompt PROMPT --workdir WORKDIR --artifact-dir ARTDIR --port 8765</code></pre></li>
@@ -1049,20 +1207,20 @@ Server routes:
     <li>Open <a href="http://localhost:8080/map.html">http://localhost:8080/map.html</a>. Use <code>localhost</code>, because the proxy accepts only that origin.</li>
   </ol>
   <p>The demo page at <a href="http://localhost:8080">http://localhost:8080</a> also works through the gateway. Use a real model there. The scripted mock model asks for <code>multiply</code>, and the gateway does not offer it.</p>
-  <p>The skill of the dataset gives the model the SQL rules. The configuration, the skill source and the exported kb belong to the project of the dataset. They are not in this repository. Export the bundle again after you change the skill (section 9.4).</p>
+  <p>The skill of the dataset gives the model the SQL rules. The configuration, the skill source and the exported kb belong to the project of the dataset. They are not in this repository. Export the bundle again after you change the skill (section 10.4).</p>
 
-  <h3>16.8 Use the map page</h3>
+  <h3>17.8 Use the map page</h3>
   <ol class="procedure">
     <li>Under <strong>Map file for the next question</strong>, select <strong>GeoJSON</strong> or <strong>GeoParquet</strong>.</li>
     <li>Type a question that asks for features. For example: <q>Show the points within 5 mi of a line</q>.</li>
     <li>Press <strong>Send</strong>.</li>
-    <li>Watch the trace panel (section 16.9).</li>
+    <li>Watch the trace panel (section 17.10).</li>
     <li>Read the answer.</li>
     <li>Select a feature on the map to see its attributes.</li>
     <li>To hide a layer, clear its box in the layer list.</li>
     <li>To start a new conversation, press <strong>Clear</strong>. The page removes the saved conversation, every added map layer and any open popup. The basemap stays.</li>
   </ol>
-  <p>The conversation survives a page reload (section 11.4). The layers do not.</p>
+  <p>The conversation survives a page reload (section 12.4). The layers do not.</p>
   <p>A link with <code>?q=...</code> fills the question box. It does not send the question. You press Send.</p>
   <p>A question that relates two tables, for example points near a line, gives two layers. Each layer has its own color. The page draws polygons first, then lines, then points. The map zooms to the extent of all layers.</p>
   <p>The format switch applies to the next question. It does not redraw the current result, because its files exist in one format only. To see the other format, select it and ask again.</p>
@@ -1076,7 +1234,48 @@ Server routes:
     <li>The page has its own Content Security Policy. <a href="#ref-csp">[CSP]</a> It permits <code>js.arcgis.com</code> and <code>*.arcgisonline.com</code>. The browser reports one blocked <code>eval</code> from the SDK. It does not change the result.</li>
   </ul>
 
-  <h3>16.9 Read the trace panel</h3>
+  <h3 id="map-tools">17.9 Use the map page tools</h3>
+  <p>The map page registers nine page tools (section 7). With these tools, the model draws files, moves the view and changes the layers that the user sees. The data still comes from <code>NAME_query</code> on <code>/mcp</code>.</p>
+  <figure>
+    <a href="images/map-tools.svg"><img src="images/map-tools.svg" width="600" height="370" loading="lazy" alt="The model chooses tools. The WASM agent sends data tool calls to the gateway on /mcp, which relays them to mcp-rwee. It sends page tool calls through document.modelContext, native or from modelcontext.js, to map.js. map.js changes the ArcGIS MapView and reads map files from /artifacts through the gateway."></a>
+    <figcaption><strong>Figure 14.</strong> Data tools go to the gateway. Map tools run in <code>map.js</code> and change the view.</figcaption>
+  </figure>
+  <div class="table-wrap"><table>
+    <caption>Map page tools</caption>
+    <thead><tr><th scope="col">Tool</th><th scope="col">Arguments</th><th scope="col">Result</th></tr></thead><tbody>
+      <tr><td><code>map_add_geojson</code></td><td><code>url</code>, optional <code>name</code></td><td>Draws the GeoJSON file and zooms to it. The URL must have the page origin, for example an <code>/artifacts/...</code> URL from a query.</td></tr>
+      <tr><td><code>map_add_geoparquet</code></td><td><code>url</code>, <code>geometry_type</code> (<code>point</code>, <code>polyline</code> or <code>polygon</code>), optional <code>name</code></td><td>Draws the GeoParquet file and zooms to it. The file must have a WKB <code>geometry</code> column in WGS84.</td></tr>
+      <tr><td><code>map_get_zoom</code></td><td>None</td><td>Zoom level, scale and center.</td></tr>
+      <tr><td><code>map_set_zoom</code></td><td><code>zoom</code>, optional <code>lon</code> and <code>lat</code></td><td>Sets the zoom level. With <code>lon</code> and <code>lat</code>, it also centers the map.</td></tr>
+      <tr><td><code>map_get_extent</code></td><td>None</td><td>Visible extent in WGS84 longitude and latitude.</td></tr>
+      <tr><td><code>map_set_extent</code></td><td><code>xmin</code>, <code>ymin</code>, <code>xmax</code>, <code>ymax</code> (WGS84)</td><td>Shows the extent. The map fits it, so the result can be a little larger.</td></tr>
+      <tr><td><code>map_list_layers</code></td><td>None</td><td>Layers on the map, with feature counts, geometry type and visibility.</td></tr>
+      <tr><td><code>map_set_layer_visible</code></td><td><code>name</code>, <code>visible</code></td><td>Shows or hides one layer.</td></tr>
+      <tr><td><code>map_clear</code></td><td>None</td><td>Removes every layer. The basemap and the conversation stay.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Rules for the map tools:</p>
+  <ul>
+    <li><strong>Same origin:</strong> <code>map_add_geojson</code> and <code>map_add_geoparquet</code> accept only a URL on the page origin. A <code>NAME_query</code> result gives such a URL in its <code>files:</code> list. Another origin is a tool error.</li>
+    <li><strong>New map for each question:</strong> The first layer of a new question removes the layers of the previous question. Later layers in the same question are added. A query result follows the same rule.</li>
+    <li><strong>Name:</strong> Without <code>name</code>, the layer name is the file name without the extension. A layer with the same name replaces the earlier layer.</li>
+    <li><strong>GeoJSON type:</strong> The tool learns the geometry type and the feature count after the layer loads. It then sets the symbol for that type.</li>
+    <li><strong>GeoParquet type:</strong> The model gives <code>geometry_type</code>, because <code>ParquetLayer</code> needs it before it loads.</li>
+    <li><strong>WGS84:</strong> The extent tools use longitude and latitude in degrees. The view uses Web Mercator. The tools convert the values and round them to 6 decimal places.</li>
+    <li><strong>Clear:</strong> <code>map_clear</code> removes the layers and the layer list. The <strong>Clear</strong> button also removes the conversation.</li>
+  </ul>
+  <p>An example from a live run on 9 November 2026 (Azure model, real gateway, test files). The question was: <q>Draw the GeoJSON file /artifacts/RUN/wells.geojson and the GeoParquet file /artifacts/RUN/pipes.parquet (a line). Then hide the pipes, set the zoom to 7, and tell me the map extent and how many wells there are.</q></p>
+  <ol>
+    <li><code>map_add_geojson</code> with the wells file.</li>
+    <li><code>map_add_geoparquet</code> with the pipes file and <code>geometry_type: "polyline"</code>.</li>
+    <li><code>map_set_layer_visible</code> with <code>name: "pipes"</code> and <code>visible: false</code>.</li>
+    <li><code>map_set_zoom</code> with <code>zoom: 7</code>.</li>
+    <li><code>map_get_extent</code>.</li>
+    <li><code>map_list_layers</code>.</li>
+  </ol>
+  <p>The answer gave the extent and <q>Wells: 2</q>. The map showed the wells, the hidden pipes and zoom 7.</p>
+
+  <h3>17.10 Read the trace panel</h3>
   <p>The left panel shows the agent at work. A bar and a status line show the current activity and the elapsed time.</p>
   <div class="table-wrap"><table>
     <caption>Rows in the trace panel</caption>
@@ -1092,7 +1291,7 @@ Server routes:
     <li>Clear the <strong>Trace</strong> box to hide the rows.</li>
   </ul>
 
-  <h3>16.10 Limits of narrow mode</h3>
+  <h3>17.11 Limits of narrow mode</h3>
   <ul>
     <li>Distances in metres use the local projection that the skill of the dataset gives. For exact geodesic distances on long lines, use <code>passthrough</code>.</li>
     <li>One tool call gives at most 6 layers.</li>
@@ -1103,7 +1302,7 @@ Server routes:
     <li>A GeometryCollection result has no <code>geometry_type</code>. The map does not draw it as GeoParquet.</li>
   </ul>
 
-  <h3>16.11 Checked results</h3>
+  <h3>17.12 Checked results</h3>
   <p>Checked from 7 to 9 November 2026 on Apple Silicon with <code>mcp-rwee</code>. The results for each dataset are in the project of that dataset.</p>
   <ul>
     <li>In <code>narrow</code> mode, <code>tools/list</code> gave two tools. In <code>passthrough</code> mode, it gave <code>read</code>, <code>write</code>, <code>edit</code> and <code>execute</code>.</li>
@@ -1112,9 +1311,9 @@ Server routes:
 </section>
 
 <section id="tokens">
-  <h2>17. Reduce the token cost</h2>
+  <h2>18. Reduce the token cost</h2>
   <p>Each model call sends the full conversation of the turn again. Thus, a large tool result costs tokens at each later call in that turn. The <code>narrow</code> tools keep their results small.</p>
-  <h3>17.1 Table cards</h3>
+  <h3>18.1 Table cards</h3>
   <p><code>NAME_layers</code> with no table gives a legend and one card for each table. A card has the table name, the geometry type, the display column, a short description and one line for each column.</p>
   <p>An example column line:</p>
   <pre><code>water_depth Double m cast "Water depth": 104.5, 350.0 +</code></pre>
@@ -1125,11 +1324,11 @@ Server routes:
     <li>Coded values show as <code>KEY=meaning</code>. The question uses the meaning, and the SQL uses the key.</li>
     <li>Numeric and date columns (<code>Double</code>, <code>Integer</code>, <code>SmallInteger</code>, <code>Date</code>) show 2 example values. <code>like</code> columns show 3. Other columns show up to 16. A <code>+</code> means that more values exist.</li>
   </ul>
-  <h3>17.2 Query output</h3>
+  <h3>18.2 Query output</h3>
   <p>The map draws a result with geometry from its file. Thus, the model needs only the shape of that result: <code>row_count</code>, <code>stats</code> and 10 sample rows. A result without geometry gives the rows, up to 200. The skill tells the model to write in its answer every value that the question asks for, because the user does not see tool results.</p>
-  <h3>17.3 Measured result</h3>
+  <h3>18.3 Measured result</h3>
   <p>The cards, the sample rows and the rules in the skill body were measured on 7 November 2026 with azure/gpt-5.5-2026-04-24. Five narrow questions used 106,522 tokens before and a mean of 56,317 tokens after, in 3 runs. Model calls for each question went from 5.8 to 4.0. All 15 answers were correct. The result is for one model and five questions. It is not a general benchmark.</p>
-  <h3>17.4 What was tried and removed</h3>
+  <h3>18.4 What was tried and removed</h3>
   <p>The token and recovery work took ideas from RTK, TokenEconomizer and fx. <a href="#ref-rtk">[RTK]</a> <a href="#ref-token-economizer">[TOKENECONOMIZER]</a> <a href="#ref-fx">[FX]</a> To keep the harness minimal, most of it was removed again on 8 November 2026:</p>
   <ul>
     <li>Generic result shaping in the gateway (from RTK) was removed. The measured savings came from the cards and the sample rows.</li>
@@ -1139,14 +1338,14 @@ Server routes:
 </section>
 
 <section id="limits">
-  <h2>18. Limits and unsupported features</h2>
+  <h2>19. Limits and unsupported features</h2>
   <div class="table-wrap"><table>
     <caption>Implemented limits</caption>
     <thead><tr><th scope="col">Item</th><th scope="col">Limit or behavior</th></tr></thead><tbody>
       <tr><td>Agents</td><td>One agent per session.</td></tr>
       <tr><td>MCP endpoints</td><td>One same-origin endpoint per session.</td></tr>
       <tr><td>Concurrent operations</td><td>One send or clear per session instance. Calls are not queued.</td></tr>
-      <tr><td>Loop iterations</td><td>10 model/tool iterations. A turn makes at most one summary call.</td></tr>
+      <tr><td>Loop iterations</td><td><code>maxModelTurns</code> model/tool iterations, default 50. A turn makes at most one summary call.</td></tr>
       <tr><td>Tool order</td><td>Sequential execution in model-provided order.</td></tr>
       <tr><td>Tool names</td><td>1–128 accepted ASCII characters.</td></tr>
       <tr><td>Tool output</td><td>30,000 retained Rust characters plus a marker when truncated.</td></tr>
@@ -1165,11 +1364,11 @@ Server routes:
   </table></div>
   <p>The timeout limits silence, not total elapsed time. A response that keeps sending chunks can remain active longer than the timeout setting.</p>
   <p>The timeout applies to HTTP work. It does not impose a deadline on custom JavaScript model work.</p>
-  <h3>18.1 Features deliberately absent</h3>
+  <h3>19.1 Features deliberately absent</h3>
   <ul>
     <li>Graph execution and router nodes.</li>
     <li>Multiple agents, handoffs, and delegation.</li>
-    <li>Mutable policy hooks and local JavaScript tool registration.</li>
+    <li>Mutable policy hooks. Page tools come only through WebMCP (section 7).</li>
     <li>Steering and queued sends.</li>
     <li>Browser vector search and embedding endpoints.</li>
     <li>Skill scripts and template rendering.</li>
@@ -1185,7 +1384,7 @@ Server routes:
 </section>
 
 <section id="migration">
-  <h2>19. Migrate from the prototype</h2>
+  <h2>20. Migrate from the prototype</h2>
   <p>This implementation intentionally removes prototype APIs. It does not preserve the earlier extensibility model.</p>
   <div class="table-wrap"><table>
     <caption>Migration map</caption>
@@ -1193,7 +1392,7 @@ Server routes:
       <tr><td><code>Flow</code>, graph JSON, <code>workflows</code></td><td>Use the direct agent loop. Move required application sequencing to server tools.</td></tr>
       <tr><td>Agent handoff or delegation</td><td>Remove handoff configuration. The browser has one agent.</td></tr>
       <tr><td><code>hooks</code>, including model and tool policy hooks</td><td>Move enforced policy to the model proxy and tool server. Use <code>onEvent</code> only for observation.</td></tr>
-      <tr><td>JavaScript <code>tools</code> with <code>func</code></td><td>Register those operations on the MCP server.</td></tr>
+      <tr><td>JavaScript <code>tools</code> with <code>func</code></td><td>Register server operations on the MCP server. Register page operations with <code>document.modelContext.registerTool()</code> (section 7).</td></tr>
       <tr><td><code>collection</code>, <code>embed</code>, <code>embedModel</code></td><td>Use an MCP knowledge-search tool when required.</td></tr>
       <tr><td><code>steer()</code> and queued sends</td><td>Await the current send. A host can cancel before it starts a different task.</td></tr>
       <tr><td><code>traceJsonl()</code></td><td>Retain selected <code>onEvent</code> values in the host.</td></tr>
@@ -1209,7 +1408,7 @@ Server routes:
   </table></div>
   <p>The binding rejects <code>hooks</code>, <code>tools</code>, <code>agents</code>, <code>collection</code>, <code>embed</code>, <code>embedModel</code>, <code>reserveTokens</code>, <code>keepRecentTokens</code>, <code>store</code>, and <code>sessionId</code> when present.</p>
   <p>This explicit error prevents an old application from silently losing its configured policy hooks.</p>
-  <h3>19.1 Migration procedure</h3>
+  <h3>20.1 Migration procedure</h3>
   <ol class="procedure">
     <li>Register application tools on the server's <code>/mcp</code> endpoint.</li>
     <li>Move required access-control checks to the server.</li>
@@ -1222,8 +1421,8 @@ Server routes:
 </section>
 
 <section id="checks">
-  <h2>20. Run checks and read measurements</h2>
-  <h3>20.1 Native checks</h3>
+  <h2>21. Run checks and read measurements</h2>
+  <h3>21.1 Native checks</h3>
   <p>Each command is an independent check. Run the commands from the repository root.</p>
   <ol class="procedure">
     <li>Run the native tests.<pre><code>cargo test --workspace</code></pre></li>
@@ -1231,7 +1430,7 @@ Server routes:
     <li>Check formatting.<pre><code>cargo fmt --all -- --check</code></pre></li>
     <li>Check the WASM target.<pre><code>cargo check -p gait-wasm --target wasm32-unknown-unknown</code></pre></li>
   </ol>
-  <h3>20.2 Python checks</h3>
+  <h3>21.2 Python checks</h3>
   <ol class="procedure">
     <li>Check the exporter.<pre><code>python3 tools/test_export_kb.py</code></pre></li>
     <li>Check the demo server.<pre><code>python3 tools/test_demo_server.py</code></pre></li>
@@ -1239,7 +1438,7 @@ Server routes:
     <li>Check the gateway.<pre><code>python3 tools/test_gateway.py</code></pre></li>
     <li>Check the upstream script. This check needs DuckDB.<pre><code>uv run --with duckdb python3 tools/test_narrow.py</code></pre></li>
   </ol>
-  <h3>20.3 Browser checks</h3>
+  <h3>21.3 Browser checks</h3>
   <p><strong>Precondition:</strong> A current release package and current example skill bundle are present in <code>web/</code>.</p>
   <ol class="procedure">
     <li>Run the browser suite.<pre><code>python3 tools/e2e.py</code></pre></li>
@@ -1248,13 +1447,35 @@ Server routes:
   <p>The browser suite starts an isolated Chrome profile. It serves local MCP and model fixtures. It does not spend tokens on a live provider.</p>
   <figure>
     <a href="images/e2e-map.svg"><img src="images/e2e-map.svg" width="600" height="310" loading="lazy" alt="tools/e2e.py opens map.html in isolated Chrome through the real gateway. A fake mcp-rwee serves fixture files and a fake model on another origin asks for two layers. The ArcGIS SDK loads from the network."></a>
-    <figcaption><strong>Figure 12.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
+    <figcaption><strong>Figure 15.</strong> The map test uses the real gateway with a fake upstream and a fake model.</figcaption>
   </figure>
   <p>The suite also opens <code>map.html</code> through the real gateway (<code>tools/gateway.py</code>). A fake mcp-rwee server answers <code>write</code> and <code>execute</code>, and serves the files in <code>fixtures/map</code> with <code>HEAD</code> and <code>Range</code>. These files are local test data and are not in the repository. <code>tools/narrow.py</code> wrote them: 2 points and 1 line, in each format. A fake model on a second origin asks for the two layers and then answers. For GeoParquet and then GeoJSON, the suite checks that the server receives only that format, that the map draws both layers from those files, and that the switch does not redraw the current result. This part needs the network, because the page loads the ArcGIS Maps SDK and the basemap.</p>
   <div class="caution"><p><strong>Caution:</strong> Without a network connection, the map checks fail and the suite exits with an error.</p></div>
-  <p>The suite covers MCP JSON and SSE results, pagination, cancellation, duplicate names, skill loading, saved and damaged state, compaction, UI controls, reload, Clear, and reconnect races.</p>
+  <p>The suite covers MCP JSON and SSE results, the turn limit, page tools, the map tools, pagination, cancellation, duplicate names, skill loading, saved and damaged state, compaction, UI controls, reload, Clear, and reconnect races.</p>
   <p>The suite loads generated files from <code>web/pkg</code>. A stale release package can make it test older code.</p>
-  <h3>20.4 WASM-specific tests</h3>
+  <div class="table-wrap"><table>
+    <caption>Browser check groups for page tools and the turn limit</caption>
+    <thead><tr><th scope="col">Group</th><th scope="col">What it checks</th></tr></thead><tbody>
+      <tr><td><code>test_turn_limit</code></td><td>50 model calls without <code>maxModelTurns</code>. 3 calls with <code>maxModelTurns: 3</code>. The values <code>0</code>, <code>1.5</code>, <code>1001</code> and <code>"5"</code> stop session creation.</td></tr>
+      <tr><td><code>test_page_tools</code></td><td>An MCP-shaped result reaches the model. A thrown error is a tool error. Cancel aborts the signal of a running tool. The list changes between turns. A tool registered after <code>create()</code> runs. A duplicate name is an <code>InvalidStateError</code>. A tool that throws a message like the Chrome parse error runs one time. Cancel stops a turn whose <code>getTools()</code> does not finish.</td></tr>
+      <tr><td><code>test_page</code></td><td>The scripted model reads the chat through <code>page_read_messages</code>.</td></tr>
+      <tr><td><code>test_map_tools</code></td><td>The nine map tools are registered. Zoom and extent change the live view. A bad extent, an unknown layer and a file on another origin are errors. With <code>fixtures/map</code>: GeoJSON and GeoParquet files are drawn and listed, a layer is hidden, and <code>map_clear</code> keeps the basemap.</td></tr>
+    </tbody>
+  </table></div>
+  <h4>Run the browser suite with native WebMCP</h4>
+  <p>The suite uses the shim by default. To test Chrome's own WebMCP, add the features to the Chrome command of the suite.</p>
+  <ol class="procedure">
+    <li>Make a small script in a scratch folder.<pre><code class="language-python">import sys
+sys.path.insert(0, &quot;tools&quot;)
+sys.argv = [&quot;e2e.py&quot;]
+import e2e
+start = e2e.subprocess.Popen
+e2e.subprocess.Popen = lambda args, **kw: start(args[:1] + [&quot;--enable-features=WebMCPTesting,WebMCP&quot;] + args[1:], **kw)
+e2e.main()</code></pre></li>
+    <li>Run the script from the repository root.<pre><code>python3 /path/to/native_e2e.py</code></pre></li>
+    <li>Compare the count of passed checks with the run that uses the shim.</li>
+  </ol>
+  <h3>21.4 WASM-specific tests</h3>
   <ol class="procedure">
     <li>Start the WASM test server.<pre><code>wasm-pack test --chrome crates/gait-wasm</code></pre></li>
     <li>Open a second terminal.</li>
@@ -1262,12 +1483,14 @@ Server routes:
     <li>Stop the WASM test server after the tests finish.</li>
   </ol>
   <p>The interactive route avoids a dependency on a separately downloaded headless Chrome driver.</p>
-  <h3>20.5 Recorded verification</h3>
+  <h3>21.5 Recorded verification</h3>
   <p>The implementation reduction was checked on 7 November 2026. The recorded results were 30 native Rust tests, 61 browser checks, and 3 WASM-specific tests.</p>
   <p>The exporter, demo server, and proxy Python suites also passed. Clippy, formatting, and WASM target compilation passed.</p>
   <p>These are historical implementation checks. A later documentation edit does not rerun or renew the implementation results automatically.</p>
   <p>On 8 November 2026, after the minimal pass, the results were: 25 native Rust tests, 16 gateway tests, 7 upstream-script tests, 70 browser checks, and a WASM file of 272,918 bytes of the 350,000-byte budget. Before the minimal pass, the WASM file was 338,828 bytes.</p>
-  <h3>20.6 Measured build</h3>
+  <p>On 9 November 2026, after page tools (WebMCP) were added, the results were: 26 native Rust tests, 15 gateway tests, 8 upstream-script tests, 94 browser checks (with <code>fixtures/map</code> written again by <code>tools/narrow.py</code>), and a WASM file of 274,139 bytes after the unused model-parameter code was deleted. The 94 browser checks also passed in Chrome 153 with native WebMCP (<code>--enable-features=WebMCPTesting,WebMCP</code>), without the shim.</p>
+  <p>On 9 November 2026, after the turn limit became configurable: 26 native Rust tests, 8 upstream-script tests, 3 proxy tests, 15 gateway tests, 97 browser checks with the shim and 97 with native WebMCP, and a WASM file of 274,398 bytes.</p>
+  <h3>21.6 Measured build</h3>
   <div class="table-wrap"><table>
     <caption>Recorded artifact and source reduction</caption>
     <thead><tr><th scope="col">Measure</th><th scope="col">Before reduction</th><th scope="col">After reduction</th></tr></thead><tbody>
@@ -1282,13 +1505,13 @@ Server routes:
   <p>WASM initialization measured 3.9 ms cold and 1.8 ms warm median. The warm MCP round trip measured 0.70 ms median over 20 calls.</p>
   <p>Those timings exclude model latency and real-network cost. They are not a deployment service-level guarantee.</p>
   <p>The source reduction removed APIs and features. It is not an equal-feature performance comparison.</p>
-  <h3>20.7 Release profile</h3>
+  <h3>21.7 Release profile</h3>
   <p>The Cargo release profile uses size optimization, link-time optimization, and one code-generation unit. It aborts on panic and strips debug information.</p>
   <p>The WASM package uses <code>wasm-opt -Oz</code> with the listed target features. The manifest is the source for the exact build settings.</p>
 </section>
 
 <section id="troubleshooting">
-  <h2>21. Find and correct a problem</h2>
+  <h2>22. Find and correct a problem</h2>
   <div class="table-wrap"><table>
     <caption>Symptoms, causes, and first actions</caption>
     <thead><tr><th scope="col">Symptom</th><th scope="col">Likely cause</th><th scope="col">First action</th></tr></thead><tbody>
@@ -1307,7 +1530,7 @@ Server routes:
       <tr><td>A long tool request never finishes.</td><td>The response remains open and continues sending data.</td><td>Cancel the turn.</td></tr>
       <tr><td>The result contains <code>Tool error:</code>.</td><td>Arguments failed validation or the server returned an error.</td><td>Inspect the next model request or server record.</td></tr>
       <tr><td>The context budget is exhausted.</td><td>Instructions, tools, history, or tool output exceed the configured budget.</td><td>Reduce the current task or context content.</td></tr>
-      <tr><td>The iteration limit is reached (<code>max_model_turns</code>).</td><td>The model kept requesting tools without a final answer.</td><td>Inspect the tool sequence.</td></tr>
+      <tr><td>The iteration limit is reached (<code>max_model_turns</code>).</td><td>The model kept requesting tools for <code>maxModelTurns</code> calls (default 50) without a final answer.</td><td>Inspect the tool sequence. Set a higher <code>maxModelTurns</code> only if the task needs more calls.</td></tr>
       <tr><td>The turn fails with an HTTP 429, 5xx or transport error.</td><td>The provider was busy, limited the rate, or lost the connection. The harness does not retry.</td><td>Send the question again, or add retries in the model proxy.</td></tr>
       <tr><td>The provider rejects the request as too long (HTTP 400 or 413).</td><td>The token estimate was lower than the provider's count, so compaction did not start.</td><td>Set a smaller <code>contextWindow</code>.</td></tr>
       <tr><td>The conversation is gone after a page reload.</td><td>The browser blocked or emptied <code>localStorage</code>, or the host does not save <code>state()</code>.</td><td>Check the status line for a save error.</td></tr>
@@ -1319,18 +1542,22 @@ Server routes:
       <tr><td>A skill is hidden.</td><td>The opt-in string or description is absent.</td><td>Check its source frontmatter.</td></tr>
       <tr><td>A changed skill is inactive in a restored state.</td><td>Its hash in the scratchpad no longer matches.</td><td>Allow the model to activate the current skill.</td></tr>
       <tr><td>The trace omits older events.</td><td>The host retention budget removed them.</td><td>Check the host's retention policy.</td></tr>
+      <tr><td>The model does not see a page tool.</td><td>The page registered it after the turn started, its name is not valid, or the name is the same as an MCP or skill tool.</td><td>Look for a <code>tool_rejected</code> event. Send the question again after registration.</td></tr>
+      <tr><td>Every page tool error says <q>Tool was executed but the invocation failed</q>.</td><td>Native Chrome WebMCP hides the message of a thrown error.</td><td>Return an MCP result with <code>isError: true</code> and the text.</td></tr>
+      <tr><td><code>map_add_geojson</code> says the file must be on this page's origin.</td><td>The URL has a different scheme, host or port.</td><td>Use the <code>/artifacts/...</code> URL from the query result.</td></tr>
+      <tr><td>Creation fails with <code>maxModelTurns must be an integer from 1 to 1000</code>.</td><td>The value is a string, a fraction, 0, or more than 1000.</td><td>Give an integer from 1 to 1000, or leave the property out.</td></tr>
     </tbody>
   </table></div>
   <p>A failed response can follow a completed server action. Check the server's action record before requesting the same action again.</p>
 </section>
 
 <section id="implementation">
-  <h2>22. Find the implementation</h2>
+  <h2>23. Find the implementation</h2>
   <p>The repository files define the actual behavior. External protocol documents define the wider standards.</p>
   <div class="table-wrap"><table>
     <caption>Implementation source map</caption>
     <thead><tr><th scope="col">File</th><th scope="col">Responsibility</th></tr></thead><tbody>
-      <tr><td><a href="../crates/gait-core/src/agent.rs"><code>agent.rs</code></a></td><td>The one loop: compaction check, model call, tool calls, and successful commit.</td></tr>
+      <tr><td><a href="../crates/gait-core/src/agent.rs"><code>agent.rs</code></a></td><td>The one loop: compaction check, model call, tool calls, and successful commit. It merges the page tools of the turn and has <code>MAX_MODEL_CALLS</code>.</td></tr>
       <tr><td><a href="../crates/gait-core/src/mcp.rs"><code>mcp.rs</code></a></td><td>MCP metadata, listing, calling, response parsing, and tool conversion.</td></tr>
       <tr><td><a href="../crates/gait-core/src/kb.rs"><code>kb.rs</code></a></td><td>Catalog loading and skill/path validation.</td></tr>
       <tr><td><a href="../crates/gait-core/src/skills.rs"><code>skills.rs</code></a></td><td>Skill catalog disclosure, activation, instruction cache, and resource reads.</td></tr>
@@ -1342,16 +1569,17 @@ Server routes:
       <tr><td><a href="../crates/gait-core/src/llm/mod.rs"><code>llm/mod.rs</code></a></td><td>Normalized chat types, HTTP boundary, and provider selection.</td></tr>
       <tr><td><a href="../crates/gait-core/src/llm/openai.rs"><code>llm/openai.rs</code></a></td><td>OpenAI-compatible request and stream handling.</td></tr>
       <tr><td><a href="../crates/gait-core/src/llm/sse.rs"><code>llm/sse.rs</code></a></td><td>Incremental SSE line parsing for LF, CRLF, CR, and split UTF-8 input.</td></tr>
-      <tr><td><a href="../crates/gait-wasm/src/lib.rs"><code>gait-wasm/src/lib.rs</code></a></td><td>Fetch, abort guards, configuration, and the host API.</td></tr>
-      <tr><td><a href="../web/app.js"><code>web/app.js</code></a></td><td>UI state, reconnect protection, provisional text, and bounded events.</td></tr>
+      <tr><td><a href="../crates/gait-wasm/src/lib.rs"><code>gait-wasm/src/lib.rs</code></a></td><td>Fetch, abort guards, configuration (including <code>maxModelTurns</code>), the host API, and <code>page_tools</code>: page tool listing, calls, result conversion and the Chrome retry.</td></tr>
+      <tr><td><a href="../web/app.js"><code>web/app.js</code></a></td><td>UI state, reconnect protection, provisional text, bounded events, and the <code>page_read_messages</code> page tool.</td></tr>
       <tr><td><a href="../web/mock.js"><code>web/mock.js</code></a></td><td>The scripted demo model.</td></tr>
+      <tr><td><a href="../web/modelcontext.js"><code>web/modelcontext.js</code></a></td><td>The WebMCP API for browsers that do not have it. Same document only.</td></tr>
       <tr><td><a href="../web/index.html"><code>web/index.html</code></a></td><td>The demo page and its Content Security Policy.</td></tr>
       <tr><td><a href="../tools/export_kb.py"><code>tools/export_kb.py</code></a></td><td>Static bundle preparation and generated-folder cleanup.</td></tr>
       <tr><td><a href="../tools/demo_server.py"><code>tools/demo_server.py</code></a></td><td>The local static server and sample MCP multiply tool.</td></tr>
       <tr><td><a href="../tools/dev_proxy.py"><code>tools/dev_proxy.py</code></a></td><td>The local Azure development proxy.</td></tr>
       <tr><td><a href="../tools/gateway.py"><code>tools/gateway.py</code></a></td><td>The same-origin gateway to <code>mcp-rwee</code>: modes, Host and Origin checks, argument checks, the format header and streamed map files.</td></tr>
       <tr><td><a href="../tools/narrow.py"><code>tools/narrow.py</code></a></td><td>The fixed script that runs on the upstream: table cards, locked-down DuckDB, the query result and one map file in the chosen format.</td></tr>
-      <tr><td><a href="../web/map.html"><code>web/map.html</code></a> and <a href="../web/map.js"><code>web/map.js</code></a></td><td>The map page, its trace panel and its Content Security Policy.</td></tr>
+      <tr><td><a href="../web/map.html"><code>web/map.html</code></a> and <a href="../web/map.js"><code>web/map.js</code></a></td><td>The map page, its trace panel, its Content Security Policy and the nine <code>map_*</code> page tools.</td></tr>
       <tr><td><a href="../openshell/Dockerfile"><code>openshell/Dockerfile</code></a></td><td>The image for the optional OpenShell sandbox.</td></tr>
       <tr><td><a href="../tools/e2e.py"><code>tools/e2e.py</code></a></td><td>Browser fixtures and end-to-end checks, including the map test with a fake <code>mcp-rwee</code> and a fake model.</td></tr>
       <tr><td><code>fixtures/map/</code></td><td>Local map test files, not in the repository, written by <code>tools/narrow.py</code>. Without them, <code>tools/e2e.py</code> skips the map checks: 2 wells and 1 pipeline in GeoJSON and GeoParquet, and the query result.</td></tr>
@@ -1359,7 +1587,7 @@ Server routes:
       <tr><td><a href="../Cargo.toml"><code>Cargo.toml</code></a> and <a href="../crates/gait-wasm/Cargo.toml"><code>gait-wasm/Cargo.toml</code></a></td><td>Release settings, dependencies, web bindings, and WASM optimization settings.</td></tr>
     </tbody>
   </table></div>
-  <h3>22.1 Regression check sources</h3>
+  <h3>23.1 Regression check sources</h3>
   <ul>
     <li><a href="../crates/gait-core/tests/harness.rs">Native loop, skills, state, cancellation, compaction, cut-off call, stop reason, and prompt-cache prefix tests.</a></li>
     <li><a href="../crates/gait-core/tests/mcp.rs">MCP result, skipped-header tool, pagination, and no-retry tests.</a></li>
@@ -1367,14 +1595,14 @@ Server routes:
     <li><a href="../crates/gait-wasm/tests/web.rs">WASM-specific Fetch and event checks.</a></li>
     <li><a href="../tools/test_export_kb.py">Exporter safety and cleanup tests.</a></li>
     <li><a href="../tools/test_demo_server.py">Demo server Origin, metadata, and input checks.</a></li>
-    <li><a href="../tools/test_dev_proxy.py">Proxy streaming checks.</a></li>
+    <li><a href="../tools/test_dev_proxy.py">Proxy streaming and path allowlist checks.</a></li>
     <li><a href="../tools/test_gateway.py">Gateway token, mode, format header, streamed file, HEAD, Host and Origin checks.</a></li>
-    <li><a href="../tools/test_narrow.py">Table cards, query output, output files and DuckDB lockdown checks.</a></li>
+    <li><a href="../tools/test_narrow.py">Table cards, query output, output files, query-once and DuckDB lockdown checks.</a></li>
   </ul>
 </section>
 
 <section id="design">
-  <h2>23. Understand the design decisions</h2>
+  <h2>24. Understand the design decisions</h2>
   <p>The sources below informed the implementation. They are not a claim that every described system has the same requirements.</p>
   <div class="table-wrap"><table>
     <caption>Evidence and project decisions</caption>
@@ -1386,10 +1614,14 @@ Server routes:
       <tr><td>The browser agent project demonstrates Rust/WASM and MCP integration. <a href="#ref-browser-agent">[BROWSER-AGENT]</a></td><td>Keep a browser-hosted loop with explicit host events.</td><td>No embedded shell, QuickJS engine, or WASI sandbox is added.</td></tr>
       <tr><td>CTXAgent studies model-managed context and reports model-dependent behavior. <a href="#ref-ctxagent">[CTXAGENT]</a></td><td>Keep deterministic budgets and summary triggers for this mixed-provider implementation.</td><td>No model-specific context-management tools.</td></tr>
       <tr><td>MCP revision 2026-07-28 uses request metadata and removes protocol sessions. <a href="#ref-mcp-release">[MCP-RELEASE]</a></td><td>Use one endpoint with self-contained POST requests.</td><td>No compatibility layer for older initialization-based servers.</td></tr>
-      <tr><td>RTK and TokenEconomizer reduce and measure the cost of tool output. <a href="#ref-rtk">[RTK]</a> <a href="#ref-token-economizer-paper">[TOKENECONOMIZER-PAPER]</a></td><td>Keep tool results small at the source: table cards and sample rows. Show tokens for each model call.</td><td>Generic shaping and the ledger were tried and removed (section 17.4).</td></tr>
+      <tr><td>RTK and TokenEconomizer reduce and measure the cost of tool output. <a href="#ref-rtk">[RTK]</a> <a href="#ref-token-economizer-paper">[TOKENECONOMIZER-PAPER]</a></td><td>Keep tool results small at the source: table cards and sample rows. Show tokens for each model call.</td><td>Generic shaping and the ledger were tried and removed (section 18.4).</td></tr>
       <tr><td>fx stops on typed reasons and never runs a cut-off tool call. <a href="#ref-fx">[FX]</a></td><td>Typed <code>stopReason</code>. A cut-off tool call never runs.</td><td>No retries. One compaction trigger, at most once per turn.</td></tr>
       <tr><td>Simplicity is the purpose of this harness.</td><td>The loop is model calls, tool calls and compaction. Skills stay.</td><td>A feature that the loop works without is removed, even when it is useful.</td></tr>
       <tr><td>DuckDB can remove file, network and settings access from SQL. <a href="#ref-duckdb-secure">[DUCKDB-SECURE]</a></td><td>Let the model write SQL in <code>narrow</code> mode, and run it in locked-down DuckDB.</td><td>Arbitrary code runs only in <code>passthrough</code> mode.</td></tr>
+      <tr><td>WebMCP lets a page offer its own tools to an agent through the browser. <a href="#ref-webmcp">[WEBMCP]</a></td><td>Page tools come only through <code>document.modelContext</code>. There is no <code>tools</code> property in the host API.</td><td>A small shim for browsers without WebMCP. No frames, other origins, events or annotations.</td></tr>
+      <tr><td>WebMCP tools follow the page state.</td><td>List the page tools again at the start of each turn.</td><td>A change during a turn waits for the next turn.</td></tr>
+      <tr><td>Chrome 153 takes a JSON string in <code>executeTool</code>, unlike the draft.</td><td>Send the object of the draft. Send a string one time only on Chrome's parse error, which occurs before the tool runs.</td><td>Remove the retry when Chrome follows the draft.</td></tr>
+      <tr><td>A spatial query can take most of the time limit.</td><td>Run the query one time into a temporary table. Make the rows and the file from it.</td><td>The temporary table holds at most 100,001 rows in memory.</td></tr>
       <tr><td>The page, not the model, knows which map layer it can draw. <a href="#ref-parquetlayer">[PARQUETLAYER]</a></td><td>The page selects GeoJSON or GeoParquet in a header. The script writes only that file.</td><td>The switch applies to the next question only.</td></tr>
     </tbody>
   </table></div>
@@ -1399,14 +1631,14 @@ Server routes:
 </section>
 
 <section id="references">
-  <h2>24. References</h2>
+  <h2>25. References</h2>
   <p>This list includes the standards, platform documents, research, comparison implementations, and projects that shaped the harness, the gateway, the map page and the token and recovery work.</p>
-  <p>The <a href="#implementation">implementation source map</a> lists the repository sources used to check actual behavior. Research findings are separated from project decisions in section 23.</p>
-  <h3>24.1 Writing style</h3>
+  <p>The <a href="#implementation">implementation source map</a> lists the repository sources used to check actual behavior. Research findings are separated from project decisions in section 24.</p>
+  <h3>25.1 Writing style</h3>
   <ol class="references">
     <li id="ref-ste"><strong>[STE]</strong> ASD-STE100 Simplified Technical English Maintenance Group. <a href="https://www.asd-ste100.org/STE_faq.html">Official FAQ</a> and <a href="https://asd-ste100.org/STE_downloads.html">official specification request page</a>. Writing-style authority. Search-accessible official information identifies Issue 9, January 2025. Direct page retrieval was blocked during this documentation update. No complete specification or dictionary compliance check is claimed.</li>
   </ol>
-  <h3>24.2 MCP protocol</h3>
+  <h3>25.2 MCP protocol</h3>
   <ol class="references" start="2">
     <li id="ref-mcp-overview"><strong>[MCP-TRANSPORTS]</strong> Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports">Transport overview, revision 2026-07-28</a>. Transport scope, message direction, metadata, and cancellation.</li>
     <li id="ref-mcp-http"><strong>[MCP-HTTP]</strong> Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http">Streamable HTTP, revision 2026-07-28</a>. POST transport, JSON/SSE responses, headers, parameter mirroring, and header value encoding.</li>
@@ -1414,9 +1646,10 @@ Server routes:
     <li id="ref-mcp-version"><strong>[MCP-VERSION]</strong> Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning">Versioning and compatibility</a>. Modern per-request metadata and legacy initialization behavior. The earlier lifecycle URL resolves to this subject.</li>
     <li id="ref-mcp-base"><strong>[MCP-BASE]</strong> Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/index">Base protocol overview</a>. JSON-RPC message shape and request IDs.</li>
     <li id="ref-mcp-release"><strong>[MCP-RELEASE]</strong> Model Context Protocol Blog. <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">The 2026-07-28 Specification</a>. Release explanation for session removal, request metadata, and transport changes.</li>
+    <li id="ref-webmcp"><strong>[WEBMCP]</strong> W3C Web Machine Learning Community Group. <a href="https://webmachinelearning.github.io/webmcp/">WebMCP</a> (draft) and <a href="https://github.com/webmachinelearning/webmcp">explainer</a>. <code>document.modelContext</code>: <code>registerTool()</code>, <code>getTools()</code>, <code>executeTool()</code>, the abort signal and the JSON-string results.</li>
   </ol>
-  <h3>24.3 Skills and agent research</h3>
-  <ol class="references" start="8">
+  <h3>25.3 Skills and agent research</h3>
+  <ol class="references" start="9">
     <li id="ref-skills-client"><strong>[SKILLS-CLIENT]</strong> Agent Skills. <a href="https://agentskills.io/client-implementation/adding-skills-support">How to add skills support to your agent</a>. Catalog, instruction, and resource disclosure; activation; state over time.</li>
     <li id="ref-skills-spec"><strong>[SKILLS-SPEC]</strong> Agent Skills. <a href="https://agentskills.io/specification">Agent Skills specification</a>. Source directory structure and frontmatter format. This repository uses a restricted runtime subset and a project-specific opt-in.</li>
     <li id="ref-context"><strong>[CONTEXT]</strong> Anthropic. <a href="https://www.anthropic.com/research/effective-context-engineering-for-ai-agents">Effective context engineering for AI agents</a>, 29 September 2025. Context selection, tool surfaces, and information loaded when needed.</li>
@@ -1427,8 +1660,8 @@ Server routes:
     <li id="ref-ctxagent"><strong>[CTXAGENT]</strong> Matthias Busch, Marius Tacke, Roland C. Aydin, Christian Feiler, and Christian J. Cyron. <a href="https://arxiv.org/abs/2610.34425">CTXAgent — Self-Controlled Context Management of LLM Agents</a>, submitted 25 October 2026. Research reference reviewed through its abstract. Its results do not establish behavior for this harness or every configured model.</li>
     <li id="ref-browser-agent"><strong>[BROWSER-AGENT]</strong> tjfontaine. <a href="https://github.com/tjfontaine/agent-in-a-browser">agent-in-a-browser / Edge Agent</a>. Primary project README describing Rust/WASM, MCP, host events, and a larger browser execution environment.</li>
   </ol>
-  <h3>24.4 Rust/WASM and comparison SDK references</h3>
-  <ol class="references" start="17">
+  <h3>25.4 Rust/WASM and comparison SDK references</h3>
+  <ol class="references" start="18">
     <li id="ref-wasm-build"><strong>[WASM-BUILD]</strong> wasm-bindgen project. <a href="https://wasm-bindgen.github.io/wasm-pack/book/commands/build.html">wasm-pack build command</a>. Package output and the web target.</li>
     <li id="ref-wasm-deploy"><strong>[WASM-DEPLOY]</strong> wasm-bindgen project. <a href="https://wasm-bindgen.github.io/wasm-bindgen/reference/deployment.html">Deploying Rust and WebAssembly</a>. Browser module loading and deployment targets.</li>
     <li id="ref-wasm-functions"><strong>[WASM-FUNCTIONS]</strong> wasm-bindgen project. <a href="https://wasm-bindgen.github.io/wasm-bindgen/reference/receiving-js-closures-in-rust.html">Receiving JavaScript closures in Rust</a>. Calling host functions across the binding boundary.</li>
@@ -1436,8 +1669,8 @@ Server routes:
     <li id="ref-rmcp-client"><strong>[RMCP-CLIENT]</strong> Official Rust MCP SDK. <a href="https://docs.rs/rmcp/latest/rmcp/transport/streamable_http_client/trait.StreamableHttpClient.html">StreamableHttpClient transport interface</a>. Comparison of SDK transport requirements with the browser-specific HTTP boundary.</li>
     <li id="ref-rmcp-server"><strong>[RMCP-SERVER]</strong> Official Rust MCP SDK. <a href="https://docs.rs/rmcp/latest/rmcp/transport/streamable_http_server/tower/struct.StreamableHttpServerConfig.html">StreamableHttpServerConfig</a> and <a href="https://docs.rs/rmcp/latest/rmcp/model/struct.RequestMetaObject.html">RequestMetaObject</a>. Comparison references for modern protocol metadata and session behavior.</li>
   </ol>
-  <h3>24.5 Browser platform references</h3>
-  <ol class="references" start="23">
+  <h3>25.5 Browser platform references</h3>
+  <ol class="references" start="24">
     <li id="ref-fetch"><strong>[FETCH]</strong> MDN Web Docs. <a href="https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch">Using the Fetch API</a>. Browser requests, response reading, and request cancellation.</li>
     <li id="ref-credentials"><strong>[CREDENTIALS]</strong> MDN Web Docs. <a href="https://developer.mozilla.org/en-US/docs/Web/API/Request/credentials">Request.credentials</a>. Default same-origin credential behavior.</li>
     <li id="ref-abort"><strong>[ABORT]</strong> MDN Web Docs. <a href="https://developer.mozilla.org/en-US/docs/Web/API/AbortController">AbortController</a>. Aborting Fetch requests and response consumption.</li>
@@ -1446,15 +1679,15 @@ Server routes:
     <li id="ref-range"><strong>[RANGE]</strong> MDN Web Docs. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests">HTTP range requests</a>. <code>HEAD</code>, <code>Range</code> and <code>Content-Range</code>, as <code>ParquetLayer</code> uses them.</li>
     <li id="ref-csp"><strong>[CSP]</strong> MDN Web Docs. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP">Content Security Policy</a>. The policies of the demo page and the map page.</li>
   </ol>
-  <h3>24.6 Gateway, server, and sandbox references</h3>
-  <ol class="references" start="30">
+  <h3>25.6 Gateway, server, and sandbox references</h3>
+  <ol class="references" start="31">
     <li id="ref-mcp-rwee"><strong>[MCP-RWEE]</strong> mraad. <a href="https://github.com/mraad/mcp-rwee">mcp-rwee</a>. The upstream MCP server with <code>read</code>, <code>write</code>, <code>edit</code> and <code>execute</code>, and the per-run artifact folder. Private repository: the link needs access.</li>
     <li id="ref-fastmcp"><strong>[FASTMCP]</strong> <a href="https://gofastmcp.com/">FastMCP</a>. The Python MCP framework that <code>mcp-rwee</code> uses, including its custom routes.</li>
     <li id="ref-starlette"><strong>[STARLETTE]</strong> Starlette. <a href="https://starlette.dev/routing/">Routing</a>. A <code>GET</code> route also answers <code>HEAD</code>. The gateway relies on this for map file sizes.</li>
     <li id="ref-openshell"><strong>[OPENSHELL]</strong> NVIDIA. <a href="https://github.com/NVIDIA/OpenShell">OpenShell</a>. The optional sandbox runtime in section 3.7.</li>
   </ol>
-  <h3>24.7 Map and data references</h3>
-  <ol class="references" start="34">
+  <h3>25.7 Map and data references</h3>
+  <ol class="references" start="35">
     <li id="ref-arcgis-sdk"><strong>[ARCGIS-SDK]</strong> Esri. <a href="https://developers.arcgis.com/javascript/latest/">ArcGIS Maps SDK for JavaScript</a>. The map page loads version 5.2 from <code>js.arcgis.com</code>.</li>
     <li id="ref-geojsonlayer"><strong>[GEOJSONLAYER]</strong> Esri. <a href="https://developers.arcgis.com/javascript/latest/api-reference/esri-layers-GeoJSONLayer.html">GeoJSONLayer</a>. The layer for <code>NAME.geojson</code> files.</li>
     <li id="ref-parquetlayer"><strong>[PARQUETLAYER]</strong> Esri. <a href="https://developers.arcgis.com/javascript/latest/api-reference/esri-layers-ParquetLayer.html">ParquetLayer</a>. The layer for <code>NAME.parquet</code> files: absolute URLs, WKB geometry, range reads.</li>
@@ -1466,22 +1699,22 @@ Server routes:
     <li id="ref-duckdb-parquet"><strong>[DUCKDB-PARQUET]</strong> DuckDB. <a href="https://duckdb.org/docs/stable/data/parquet/overview">Reading and writing Parquet files</a>. <code>COPY ... (FORMAT PARQUET)</code> and its options.</li>
     <li id="ref-geoparquet"><strong>[GEOPARQUET]</strong> GeoParquet. <a href="https://geoparquet.org/">geoparquet.org</a> and the <a href="https://github.com/opengeospatial/geoparquet">specification repository</a>. The geometry column and metadata of version 1.</li>
   </ol>
-  <h3>24.8 Model provider references</h3>
-  <ol class="references" start="44">
+  <h3>25.8 Model provider references</h3>
+  <ol class="references" start="45">
     <li id="ref-openai-chat"><strong>[OPENAI-CHAT]</strong> OpenAI. <a href="https://developers.openai.com/api/reference/resources/chat">Chat Completions API reference</a>. The OpenAI-compatible request, stream and usage format.</li>
     <li id="ref-openai-cache"><strong>[OPENAI-CACHE]</strong> OpenAI. <a href="https://developers.openai.com/api/docs/guides/prompt-caching">Prompt caching</a>. Automatic caching and <code>prompt_tokens_details.cached_tokens</code>.</li>
     <li id="ref-azure"><strong>[AZURE-OPENAI]</strong> Microsoft. <a href="https://learn.microsoft.com/en-us/azure/foundry/openai/reference">Azure OpenAI REST API reference</a>. Deployment URLs, <code>api-version</code> and the <code>api-key</code> header.</li>
     <li id="ref-openrouter"><strong>[OPENROUTER]</strong> OpenRouter. <a href="https://openrouter.ai/docs/quickstart">Quickstart</a>. One of the OpenAI-compatible routes that the adapter supports.</li>
   </ol>
-  <h3>24.9 Sources of the token and recovery work</h3>
-  <ol class="references" start="48">
-    <li id="ref-rtk"><strong>[RTK]</strong> rtk-ai. <a href="https://github.com/rtk-ai/rtk">RTK</a>. A command-output filter for coding agents. The source of the result-shaping rules that were tried and removed (section 17.4).</li>
-    <li id="ref-token-economizer"><strong>[TOKENECONOMIZER]</strong> Microsoft. <a href="https://github.com/microsoft/TokenEconomizer">TokenEconomizer</a>. Cost control for coding agents from earlier sessions. The source of the ledger that was tried and removed (section 17.4).</li>
+  <h3>25.9 Sources of the token and recovery work</h3>
+  <ol class="references" start="49">
+    <li id="ref-rtk"><strong>[RTK]</strong> rtk-ai. <a href="https://github.com/rtk-ai/rtk">RTK</a>. A command-output filter for coding agents. The source of the result-shaping rules that were tried and removed (section 18.4).</li>
+    <li id="ref-token-economizer"><strong>[TOKENECONOMIZER]</strong> Microsoft. <a href="https://github.com/microsoft/TokenEconomizer">TokenEconomizer</a>. Cost control for coding agents from earlier sessions. The source of the ledger that was tried and removed (section 18.4).</li>
     <li id="ref-token-economizer-paper"><strong>[TOKENECONOMIZER-PAPER]</strong> Aaron J. Li, Weijia Xu, Chandan Singh, Zixiao Chen, Jeevana Priya Inala, and others. <a href="https://arxiv.org/abs/2610.22732">TokenEconomizer: Experience-Driven Black-Box Cost Control for Coding Agents</a>. Research reference reviewed through the repository and its documents. Its results are for coding agents, not for this harness.</li>
     <li id="ref-fx"><strong>[FX]</strong> Vercel Labs. <a href="https://github.com/vercel-labs/fx">fx</a>. A coding agent. The source of the typed stop reasons, the cut-off tool call rule, the prefix-stability test and the size budget.</li>
   </ol>
-  <h3>24.10 Other references</h3>
-  <ol class="references" start="52">
+  <h3>25.10 Other references</h3>
+  <ol class="references" start="53">
     <li id="ref-rust-wasm"><strong>[RUST-WASM]</strong> The Rust Project. <a href="https://rust-lang.org/what/wasm/">Rust and WebAssembly</a>. Background on Rust compiled to WASM for the browser.</li>
     <li id="ref-unslop"><strong>[UNSLOP]</strong> Damir Sokolovsky (<a href="https://x.com/heydamir">@heydamir</a>). Unslop, licensed CC BY 4.0. The design review method for the spacing, colors and states of the map page.</li>
   </ol>

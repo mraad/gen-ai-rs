@@ -26,13 +26,13 @@ The exporter requires PyYAML. Browser checks use Chrome and the generated files 
 
 ## Design constraints
 
-- Minimal first: the loop is model calls, sequential tool calls and compaction (at most once per turn, from the local estimate). Nothing is sent again, and a tool call cut off at the output limit never runs. Before adding anything, ask whether the loop works without it; prefer deleting code. Application tools execute through one same-origin MCP endpoint, `/mcp` by default. The demo server implements `multiply`.
+- Minimal first: the loop is model calls, sequential tool calls and compaction (at most once per turn, from the local estimate). Nothing is sent again, and a tool call cut off at the output limit never runs. Before adding anything, ask whether the loop works without it; prefer deleting code. Server tools execute through one same-origin MCP endpoint, `/mcp` by default. The demo server implements `multiply`. Page tools come only through WebMCP: the page calls `document.modelContext.registerTool()`, the binding lists them with `getTools()` at the start of each turn and runs them with `executeTool()`; there is no `tools` config key. `web/modelcontext.js` supplies the API where the browser lacks it. Page tools have the page's trust; annotations are ignored.
 - Keep the core browser-independent and single-threaded. Use `Rc`, `RefCell`, and `#[async_trait(?Send)]`; do not add `Send` bounds.
 - Load the skill catalog first, one instruction body on activation, and one listed resource on request. The exporter copies only UTF-8 resources. It does not export scripts or vector data.
 - Commit only successful turns. Intermediate tool messages remain local to the turn. Cancellation cannot undo server actions. The harness never writes storage: the host saves `state()` and passes it back as `state`; a damaged value must reject creation.
 - Emit events directly to the host. Rust retains no trace. The demo redacts events before bounded display and export; custom hosts must redact raw callbacks themselves.
 - Keep credentials out of committed files and session configuration records. Server tools must validate inputs and authorize actions.
 - Preserve the size-oriented release profile and the explicit `wasm-opt` target features. A new direct model host also needs permission in the demo Content Security Policy.
-- Do not restore removed graphs, handoffs, policy hooks, local JavaScript tools, embeddings, templates, queued sends, retries, harness-side storage, the native Anthropic adapter, `x-mcp-header` mirroring, result shaping or the ledger.
+- Do not restore removed graphs, handoffs, policy hooks, a `tools` config key, embeddings, templates, queued sends, retries, harness-side storage, the native Anthropic adapter, `x-mcp-header` mirroring, result shaping or the ledger.
 
 Test user-visible behavior through the page, not only isolated callbacks. Update `README.md` and `docs/index.html` when behavior changes. Edit the static HTML directly; its figures are local SVG files in `docs/images`.

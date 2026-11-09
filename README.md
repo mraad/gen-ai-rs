@@ -1,6 +1,6 @@
 # Minimal browser agent in Rust/WASM
 
-One agent loop: call the model, execute its tools, append results, repeat. Rust runs in the browser; tools execute on the server that serves the page, through one same-origin MCP endpoint. A plain question uses one model call.
+One agent loop: call the model, execute its tools, append results, repeat. Rust runs in the browser; server tools execute on the server that serves the page, through one same-origin MCP endpoint, and page tools come from the page through [WebMCP](https://webmachinelearning.github.io/webmcp/). A plain question uses one model call.
 
 The harness has no graph runner, multi-agent routing, hook plugins, script engine, browser embeddings, or retained trace buffer. Knowledge search belongs to a tool registered on the MCP server.
 
@@ -107,7 +107,7 @@ const session = await GaitSession.create({
   mcpUrl: '/mcp',          // Defaults to /mcp; must be on this page's origin.
   onEvent: event => renderEvent(event),
   onDelta: text => appendAnswer(text),
-  // Optional: state (a saved state()), contextWindow, timeoutMs, apiKey, apiVersion.
+  // Optional: state (a saved state()), contextWindow, maxModelTurns, timeoutMs, apiKey, apiVersion.
 });
 const result = await session.send('Multiply 6 by 7.');
 // { message, usage, steps, stopReason, cancelled, error }
@@ -119,7 +119,7 @@ const { dialog, scratchpad } = session.state();
 session.free();
 ```
 
-Only one send or clear may run at a time. Overlapping calls reject. A cancelled or failed turn commits neither conversation changes nor skill activations. Cancelling closes in-flight HTTP requests; it cannot undo an action already performed on the server. Tool errors go back to the model so it can correct arguments. A run stops after ten loop iterations (`max_model_turns`); tool output keeps at most 30,000 characters plus a truncation marker. A tool call cut off at the model's output limit never runs (`max_output_tokens`). Nothing is sent again: a failed model request ends the turn, and a proxy or the host can retry.
+Only one send or clear may run at a time. Overlapping calls reject. A cancelled or failed turn commits neither conversation changes nor skill activations. Cancelling closes in-flight HTTP requests; it cannot undo an action already performed on the server. Tool errors go back to the model so it can correct arguments. A turn stops after `maxModelTurns` model calls without a final answer (`max_model_turns`; default 50, integer 1 to 1000); tool output keeps at most 30,000 characters plus a truncation marker. A tool call cut off at the model's output limit never runs (`max_output_tokens`). Nothing is sent again: a failed model request ends the turn, and a proxy or the host can retry.
 
 `contextWindow` defaults to 128,000 tokens. Before each model call, if the estimate is over budget, the turns before the current one are summarized; a turn makes at most one summary, and failed summaries preserve history. Prompts and tool schemas count against the context budget; a turn that cannot fit fails without committing state. Summary calls appear in events and usage. Token counts are estimates. `timeoutMs` defaults to 300,000 and limits network silence. The host may supply `chat(request, signal)` instead of an HTTP model for an in-browser engine; mock mode uses this same boundary.
 
@@ -130,6 +130,21 @@ The client implements the **2026-07-28 Streamable HTTP** tools path: paged `tool
 Requests use the browser's same-origin cookies. Redirects and automatic retries are disabled. Keep tool authorization, argument validation, credentials, and any destructive-action confirmation on the server. Client checks catch common top-level schema mistakes; they are not a security boundary. Responses are bounded at 16 MiB; streamed model responses are limited to 128 indexed blocks. Text and structured tool results are supported; binary content is omitted. Tool lists are discovered once per session.
 
 There is no legacy initialization/session fallback, OAuth UI, elicitation, sampling, subscriptions, reconnect loop, or extension registry. Results requiring client input fail explicitly. Complete login/approval in the host/server before calling those tools. This is a narrow tools client, not a full MCP SDK.
+
+## Page tools (WebMCP)
+
+The page can offer its own tools, for example to move the map the user sees. It registers them with the standard WebMCP API; the agent finds them with `document.modelContext.getTools()` and calls them with `executeTool()`. There is no `tools` option in `create()`.
+
+```js
+document.modelContext.registerTool({
+  name: 'page_read_messages',
+  description: 'Read the chat messages shown on this page.',
+  inputSchema: { type: 'object', properties: {} },
+  execute: async (args, { signal }) => 'user: hello',   // text, any JSON, or an MCP result with content
+}, { signal: controller.signal });                        // abort to remove the tool
+```
+
+Load `web/modelcontext.js` before the app script: it adds the API only where the browser has none (same document only). Tools are listed at the start of every turn, so a tool registered or removed between turns changes the next turn. A thrown error goes back to the model as a tool error; cancel aborts the tool's `signal`. A page tool with an invalid name or the name of an MCP or skill tool is skipped with a `tool_rejected` event. Page tools have the page's trust: annotations such as `consequentialHint` are ignored and there is no approval step. Frames, `exposedTo` and `fromOrigins` are not used. The demo page registers `page_read_messages` (ask the mock "What is on the page?"); the map page registers `map_add_geojson` and `map_add_geoparquet` (a same-origin file, for example an `/artifacts/...` URL from a query; GeoParquet needs `geometry_type` and a WKB `geometry` column in WGS84), `map_get_zoom`, `map_set_zoom` (optionally with a center), `map_get_extent`, `map_set_extent` (WGS84), `map_list_layers`, `map_set_layer_visible` and `map_clear` (removes the layers, keeps the conversation).
 
 ## Progressive skills
 
@@ -160,7 +175,7 @@ The multiply implementation runs in `tools/demo_server.py`, through `POST /mcp`.
 
 ## Migration
 
-This intentionally replaces the extensible prototype. Graphs, handoffs, mutable hooks, local JavaScript tools, steering, queued sends, browser vector search, templates, and Rust `traceJsonl()` were removed. Re-export skill bundles, register application tools on MCP, and consume `onEvent` in the host. Removed security/extension config keys reject explicitly rather than silently ignoring old policies. Provider keys entered in the browser remain readable by page scripts; deploy a same-origin provider proxy to keep credentials on the server.
+This intentionally replaces the extensible prototype. Graphs, handoffs, mutable hooks, JavaScript `tools` in the config (page tools now use WebMCP), steering, queued sends, browser vector search, templates, and Rust `traceJsonl()` were removed. Re-export skill bundles, register application tools on MCP, and consume `onEvent` in the host. Removed security/extension config keys reject explicitly rather than silently ignoring old policies. Provider keys entered in the browser remain readable by page scripts; deploy a same-origin provider proxy to keep credentials on the server.
 
 ## Checks
 
