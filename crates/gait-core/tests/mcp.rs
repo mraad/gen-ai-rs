@@ -153,3 +153,20 @@ fn tool_errors_input_requests_and_http_failures_are_not_retried() {
         assert_eq!(server.sent.borrow().len(), 2, "{mode}");
     }
 }
+
+#[test]
+fn result_text_reads_mcp_shapes_and_rejects_others() {
+    let text = |v: Value| mcp::result_text(&v);
+    assert_eq!(
+        text(json!({"content": [{"type": "text", "text": "a"}, {"type": "image"}]})).unwrap(),
+        "a\n[non-text MCP content omitted]"
+    );
+    assert_eq!(
+        text(json!({"structuredContent": {"n": 1}, "content": []})).unwrap(),
+        r#"{"n":1}"#
+    );
+    assert!(text(json!({"office": "B4"})).is_err()); // not an MCP result
+    assert!(text(json!("plain")).is_err());
+    assert!(text(json!({"content": [{"type": "text", "text": "bad"}], "isError": true})).is_err());
+    assert!(mcp::valid_name("map_zoom_to") && !mcp::valid_name("a b") && !mcp::valid_name(""));
+}

@@ -19,7 +19,6 @@ type ToolFn = dyn Fn(Value, Scratchpad) -> ToolFuture;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolOutput {
     Text(String),
-    Json(Value),
 }
 
 #[derive(Clone)]
@@ -43,6 +42,8 @@ pub struct Ctx {
     pub cancel: Cancel,
     pub trace: Trace,
     pub on_delta: Option<DeltaSink>,
+    /// Tools the page offers for this turn only (WebMCP). A clash with a fixed tool is skipped.
+    pub page_tools: Vec<ToolDef>,
 }
 
 impl Ctx {
@@ -53,6 +54,7 @@ impl Ctx {
             trace,
             cancel: Cancel::default(),
             on_delta: None,
+            page_tools: Vec::new(),
         }
     }
 }
@@ -63,6 +65,8 @@ pub struct Agent {
     skills: SkillSet,
     tools: Vec<ToolDef>,
     pub compaction: Compaction,
+    /// Model calls in one turn before it stops with `max_model_turns`.
+    pub max_model_calls: usize,
 }
 
 #[derive(Debug)]
@@ -74,7 +78,8 @@ pub struct AgentResponse {
     pub stop_reason: &'static str,
 }
 
-const MAX_MODEL_CALLS: usize = 10;
+/// Default model calls per turn; the host can change `Agent::max_model_calls`.
+pub const MAX_MODEL_CALLS: usize = 50;
 /// Checks arguments against the parts of a tool's JSON schema that models get wrong, so the
 /// model can correct itself. shortcut: no nested schemas; use a schema crate if tools need them.
 pub fn check_args(schema: &Value, args: &Value) -> Result<()> {
@@ -179,6 +184,7 @@ impl Agent {
             skills,
             tools,
             compaction: Compaction::default(),
+            max_model_calls: MAX_MODEL_CALLS,
         })
     }
 
@@ -212,7 +218,18 @@ impl Agent {
             scratchpad: Scratchpad::from_json(ctx.scratchpad.to_json()),
             ..ctx.clone()
         };
-        let tools: Vec<Value> = self.tools.iter().map(ToolDef::schema).collect();
+        let mut all = self.tools.clone();
+        for tool in &ctx.page_tools {
+            if crate::mcp::valid_name(&tool.name) && all.iter().all(|t| t.name != tool.name) {
+                all.push(tool.clone());
+            } else {
+                ctx.trace.event(
+                    "tool_rejected",
+                    format!("{}: invalid or duplicate page tool name", tool.name),
+                );
+            }
+        }
+        let tools: Vec<Value> = all.iter().map(ToolDef::schema).collect();
         let tool_tokens = serde_json::to_string(&tools)?.len() / 4;
         let budget = self
             .compaction
@@ -221,7 +238,7 @@ impl Agent {
         work.dialog.push_user(prompt);
         let mut usage = Usage::default();
         let mut compacted = false;
-        for steps in 1..=MAX_MODEL_CALLS {
+        for steps in 1..=self.max_model_calls {
             let system = work
                 .cancel
                 .run(self.skills.compose(&self.instructions, &work.scratchpad))
@@ -251,7 +268,6 @@ impl Agent {
             let request = ChatRequest {
                 messages,
                 tools: tools.clone(),
-                ..ChatRequest::default()
             };
             work.trace
                 .event_with("model_start", self.llm.model(), json!({"step": steps}));
@@ -325,8 +341,7 @@ impl Agent {
                 let output = work
                     .cancel
                     .run(async {
-                        let tool = self
-                            .tools
+                        let tool = all
                             .iter()
                             .find(|tool| &tool.name == name)
                             .ok_or_else(|| Error::Tool(format!("unknown tool '{name}'")))?;
@@ -337,7 +352,6 @@ impl Agent {
                     .await?;
                 let mut text = match output {
                     Ok(ToolOutput::Text(text)) => text,
-                    Ok(ToolOutput::Json(value)) => value.to_string(),
                     Err(error) => format!("Tool error: {error}"),
                 };
                 truncate_middle(&mut text, 30_000);
@@ -347,7 +361,10 @@ impl Agent {
         }
         Err(Error::Stopped {
             reason: "max_model_turns",
-            message: format!("agent exceeded {MAX_MODEL_CALLS} model calls without answering"),
+            message: format!(
+                "agent exceeded {} model calls without answering",
+                self.max_model_calls
+            ),
         })
     }
 }

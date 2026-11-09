@@ -150,6 +150,14 @@ $("export").addEventListener("click", () => {
   Object.assign(document.createElement("a"), { href: url, download: "gait-trace.jsonl" }).click();
   URL.revokeObjectURL(url);
 });
+// A page tool through WebMCP: the agent reads what the user sees. modelcontext.js fills in the API when the browser has none.
+document.modelContext.registerTool({
+  name: "page_read_messages",
+  description: "Read the chat messages shown on this page, oldest first.",
+  inputSchema: { type: "object", properties: {} },
+  annotations: { readOnlyHint: true },
+  execute: async () => [...$("messages").children].map((item) => `${item.className.replace("message ", "")}: ${item.textContent}`).join("\n"),
+});
 const started = performance.now();
 await init(); startupMs = performance.now() - started;
 $("model").value = MODELS.mock;

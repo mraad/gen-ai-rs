@@ -4,8 +4,10 @@ import init, { GaitSession } from "./pkg/gait_wasm.js";
 const SDK = "https://js.arcgis.com/5.2/@arcgis/core";
 const [{ default: esriConfig }, { default: Map }, { default: MapView }, { default: TileLayer },
   { default: GeoJSONLayer }, { default: ParquetLayer }, { default: ParquetFilesData }, { default: GeometryEncodingWkb },
+  { default: Extent }, webMercatorUtils,
 ] = await Promise.all(["config", "Map", "views/MapView", "layers/TileLayer", "layers/GeoJSONLayer",
-  "layers/ParquetLayer", "layers/support/ParquetFilesData", "layers/support/GeometryEncodingWkb"].map((name) => import(`${SDK}/${name}.js`)));
+  "layers/ParquetLayer", "layers/support/ParquetFilesData", "layers/support/GeometryEncodingWkb",
+  "geometry/Extent", "geometry/support/webMercatorUtils"].map((name) => import(`${SDK}/${name}.js`)));
 esriConfig.assetsPath = `${SDK}/assets`;
 await import("https://js.arcgis.com/calcite-components/5.2.0/index.js"); // registers the Calcite widgets that the zoom buttons and the popup use
 
@@ -43,6 +45,61 @@ window.gaitMap = view; // for tests and the browser console
 
 let session, busy = false, format = "geojson", live, turn = 0, batch = -1;
 const layers = new globalThis.Map(); // the SDK import shadows Map. name -> { info, layer, color, visible }
+
+// ---- page tools (WebMCP): the agent acts on the map the user sees. modelcontext.js fills in the API when the browser has none.
+const tool = (name, description, properties, execute, required = Object.keys(properties)) =>
+  document.modelContext.registerTool({ name, description, inputSchema: { type: "object", properties, required }, execute });
+const round = (n) => Math.round(n * 1e6) / 1e6;
+const GEOMETRY = { type: "string", enum: ["point", "polyline", "polygon"] };
+function addFile(format, { url, name, geometry_type }) {
+  const href = new URL(url, location.href);
+  if (href.origin !== location.origin) throw new Error("the file must be on this page's origin, for example an /artifacts/... URL from a query");
+  name ||= href.pathname.split("/").pop().replace(/\.[^.]*$/, "") || "layer";
+  if (batch !== turn) { layers.clear(); batch = turn; } // same rule as query results: a new question starts a new map
+  layers.set(name, { info: { name, format, url: href.pathname + href.search, geometry_type, row_count: null }, visible: true });
+  return draw().then(() => {
+    const entry = layers.get(name);
+    if (!entry?.layer || !view.map.layers.includes(entry.layer)) throw new Error(`could not draw ${name}: ${$("summary").textContent}`);
+    return `Added ${name}: ${entry.info.row_count} ${entry.info.geometry_type} features.`;
+  });
+}
+tool("map_add_geojson", "Draw a GeoJSON file from this site on the map, and zoom to it. Replaces a layer with the same name.",
+  { url: { type: "string", description: "Same-origin URL, for example /artifacts/RUN/wells.geojson" }, name: { type: "string" } },
+  (args) => addFile("geojson", args), ["url"]);
+tool("map_add_geoparquet", "Draw a GeoParquet file from this site on the map, and zoom to it. The file needs a WKB 'geometry' column in WGS84.",
+  { url: { type: "string", description: "Same-origin URL, for example /artifacts/RUN/wells.parquet" }, geometry_type: GEOMETRY, name: { type: "string" } },
+  (args) => addFile("parquet", args), ["url", "geometry_type"]);
+tool("map_get_zoom", "Get the map zoom level (0 world to 20 street), scale and center.", {},
+  async () => ({ zoom: round(view.zoom), scale: Math.round(view.scale), center: [round(view.center.longitude), round(view.center.latitude)] }));
+tool("map_set_zoom", "Set the map zoom level (0 world to 20 street). Give lon and lat to also center the map there.",
+  { zoom: { type: "number" }, lon: { type: "number" }, lat: { type: "number" } },
+  async ({ zoom, lon, lat }) => {
+    await view.goTo({ zoom, ...(lon === undefined || lat === undefined ? {} : { center: [lon, lat] }) });
+    return `Zoom is ${round(view.zoom)}, center ${round(view.center.longitude)}, ${round(view.center.latitude)}.`;
+  }, ["zoom"]);
+const extentWgs84 = () => { const e = webMercatorUtils.webMercatorToGeographic(view.extent); return { xmin: round(e.xmin), ymin: round(e.ymin), xmax: round(e.xmax), ymax: round(e.ymax) }; };
+tool("map_get_extent", "Get the visible map extent in longitude and latitude (WGS84).", {}, async () => extentWgs84());
+tool("map_set_extent", "Show an extent in longitude and latitude (WGS84). The map fits it, so the result can be a little larger.",
+  { xmin: { type: "number" }, ymin: { type: "number" }, xmax: { type: "number" }, ymax: { type: "number" } },
+  async ({ xmin, ymin, xmax, ymax }) => {
+    if (!(xmin < xmax && ymin < ymax)) throw new Error("need xmin < xmax and ymin < ymax");
+    await view.goTo(new Extent({ xmin, ymin, xmax, ymax, spatialReference: { wkid: 4326 } }));
+    return extentWgs84();
+  });
+tool("map_clear", "Remove every layer drawn on the map. The basemap and the conversation stay.", {},
+  async () => { const n = layers.size; clearMap(); return `Removed ${n} layer${n === 1 ? "" : "s"}.`; });
+tool("map_list_layers", "List the layers drawn on the map, with feature counts and visibility.", {},
+  async () => [...layers.values()].map(({ info, visible }) => ({ name: info.name, features: info.row_count, geometry: info.geometry_type, visible })));
+tool("map_set_layer_visible", "Show or hide one layer drawn on the map, by name.",
+  { name: { type: "string" }, visible: { type: "boolean" } },
+  async ({ name, visible }) => {
+    const entry = layers.get(name);
+    if (!entry) throw new Error(`no layer named '${name}'; call map_list_layers`);
+    entry.visible = visible;
+    if (entry.layer) entry.layer.visible = visible;
+    showList([...layers.values()]);
+    return `${name} is now ${visible ? "shown" : "hidden"}.`;
+  });
 
 // ---- result: the page reads the tool result from the /mcp reply. The core keeps no tool output in its dialog.
 const realFetch = window.fetch;
@@ -91,24 +148,33 @@ async function draw() {
           spatialReference: { wkid: 4326 }, geometryType: info.geometry_type, outFields: ["*"], ...common });
     view.map.add(entry.layer);
   }
-  $("result").hidden = false;
-  const total = entries.reduce((n, e) => n + e.info.row_count, 0);
-  $("summary").textContent = `${entries.length} layer${entries.length === 1 ? "" : "s"}, ${total} feature${total === 1 ? "" : "s"}`;
-  $("layerlist").replaceChildren(...entries.map(listItem));
+  showList(entries);
   const mine = new Set(added.map((e) => e.layer));
   try {
     let extent;
     for (const entry of added) {
       const layerView = await view.whenLayerView(entry.layer);
       await new Promise((done) => { const check = () => layerView.updating ? setTimeout(check, 100) : done(); check(); });
+      if (!entry.info.geometry_type) { // a GeoJSON file added by a page tool: the type is known only after it loads
+        entry.info.geometry_type = entry.layer.geometryType;
+        entry.layer.renderer = { type: "simple", symbol: symbol(entry.layer.geometryType, entry.color) };
+      }
+      entry.info.row_count ??= await entry.layer.queryFeatureCount();
       const part = (await entry.layer.queryExtent()).extent;
       if (part) extent = extent ? extent.union(part) : part;
     }
     if (extent && added.every((e) => mine.has(e.layer))) await view.goTo(extent.width ? extent.expand(1.3) : { target: extent.center, zoom: 8 });
+    showList(entries);
     if (added.every((e) => view.map.layers.includes(e.layer))) document.body.dataset.drawn = [...new Set(added.map((e) => e.info.format))].join(" ");
   } catch (error) {
     $("summary").textContent += `. The map could not draw it: ${error.message} ${error.details?.error?.message ?? error.details?.error ?? ""}`;
   }
+}
+function showList(entries) {
+  $("result").hidden = false;
+  const total = entries.reduce((n, e) => n + (e.info.row_count ?? 0), 0);
+  $("summary").textContent = `${entries.length} layer${entries.length === 1 ? "" : "s"}, ${total} feature${total === 1 ? "" : "s"}`;
+  $("layerlist").replaceChildren(...entries.map(listItem));
 }
 function listItem({ info, color, layer, visible }) {
   const url = new URL(info.url, location.href).href;
@@ -287,14 +353,17 @@ async function send(question) {
   const unsaved = save();
   setBusy(false); setStatus(unsaved ? `Not saved: ${unsaved}` : failed ? "Stopped" : "Ready", failed || unsaved ? "error" : "ok");
 }
+function clearMap() {
+  view.map.removeAll(); // every added layer; the basemap is separate and stays
+  view.closePopup?.();
+  layers.clear(); $("layerlist").replaceChildren(); $("result").hidden = true; document.body.dataset.drawn = "";
+}
 async function clear() {
   if (busy) return;
   try { localStorage.removeItem(SAVED); } catch { /* storage blocked: nothing was saved */ }
   await session?.clear();
   $("messages").replaceChildren();
-  view.map.removeAll(); // every added layer; the basemap is separate and stays
-  view.closePopup?.();
-  layers.clear(); $("layerlist").replaceChildren(); $("result").hidden = true; document.body.dataset.drawn = "";
+  clearMap();
   if (session) setStatus("Cleared", "ok"); else await connect();
 }
 $("chat").addEventListener("submit", (e) => { e.preventDefault(); send($("prompt").value.trim()); });

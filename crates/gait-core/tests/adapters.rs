@@ -87,16 +87,12 @@ fn openai_reply() -> Value {
     })
 }
 
-fn request_with_params() -> ChatRequest {
+fn request() -> ChatRequest {
     ChatRequest {
         messages: vec![Message::system("s"), Message::user("u")],
         tools: vec![
             json!({"type": "function", "function": {"name": "f", "description": "d", "parameters": {"type": "object"}}}),
         ],
-        params: json!({"temperature": 0.0, "name": "skill-name", "description": "frontmatter"})
-            .as_object()
-            .unwrap()
-            .clone(),
     }
 }
 
@@ -104,7 +100,7 @@ fn request_with_params() -> ChatRequest {
 fn openai_request_and_response() {
     let http = FakeHttp::replying(200, openai_reply());
     let client = create_client("openai/gpt-4.1", config(), http.clone()).unwrap();
-    let response = block_on(client.chat(request_with_params())).unwrap();
+    let response = block_on(client.chat(request())).unwrap();
     let sent = http.last();
     assert_eq!(sent.url, "https://api.openai.com/v1/chat/completions");
     assert_eq!(
@@ -112,24 +108,13 @@ fn openai_request_and_response() {
         format!("Bearer {SECRET}")
     );
     assert_eq!(sent.body["model"], "gpt-4.1");
-    assert_eq!(sent.body["temperature"], 0.0);
-    // Frontmatter keys must not reach the API.
-    assert!(sent.body.get("name").is_none());
-    assert!(sent.body.get("description").is_none());
+    assert_eq!(sent.body["messages"][1]["content"], "u");
     assert_eq!(response.finish_reason.as_deref(), Some("tool_calls"));
     assert_eq!(response.usage.unwrap().total_tokens, 10);
     assert_eq!(
         response.message.tool_calls.unwrap()[0].function.arguments,
         "{\"a\":1}"
     );
-}
-
-#[test]
-fn reasoning_models_drop_sampling_params() {
-    let http = FakeHttp::replying(200, openai_reply());
-    let client = create_client("openai/gpt-5.1", config(), http.clone()).unwrap();
-    block_on(client.chat(request_with_params())).unwrap();
-    assert!(http.last().body.get("temperature").is_none());
 }
 
 #[test]

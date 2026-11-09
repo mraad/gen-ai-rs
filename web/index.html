@@ -66,7 +66,7 @@
     <section aria-label="Chat">
       <div id="messages" aria-live="polite"></div>
       <form id="chat">
-        <input id="prompt" aria-label="Message" autocomplete="off" placeholder="Multiply 6 by 7. Convert 5 miles to km." autofocus>
+        <input id="prompt" aria-label="Message" autocomplete="off" placeholder="Multiply 6 by 7. Convert 5 miles to km. What is on the page?" autofocus>
         <button id="send" class="primary" disabled>Send</button>
         <button id="stop" type="button" disabled>Stop</button>
       </form>
@@ -83,6 +83,7 @@
     </section>
   </div>
 </main>
+<script type="module" src="./modelcontext.js"></script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>
