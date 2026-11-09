@@ -86,7 +86,7 @@ def column_stats(values):
 
 def run_one(con, art, name, sql, print_rows, fmt):
     sql = sql.strip().rstrip(";")
-    con.execute("DROP TABLE IF EXISTS temp.result")  # the last query's temp table would hide a database table named result
+    con.execute("DROP TABLE IF EXISTS temp.main.result")  # the last query's temp table would hide a database table named result
     columns = con.execute(f"DESCRIBE SELECT * FROM (\n{sql}\n)").fetchall()  # fails unless SELECT
     geo = [c[0] for c in columns if str(c[1]).startswith("GEOMETRY")]
     # The query runs once, into a temporary table; the rows and the file come from it. One extra row tells if it was cut.

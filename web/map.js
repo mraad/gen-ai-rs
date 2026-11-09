@@ -57,13 +57,13 @@ function addFile(format, { url, name, geometry_type }) {
   name ||= href.pathname.split("/").pop().replace(/\.[^.]*$/, "") || "layer";
   if (batch !== turn) { layers.clear(); batch = turn; } // same rule as query results: a new question starts a new map
   layers.set(name, { info: { name, format, url: href.pathname + href.search, geometry_type, row_count: null }, visible: true });
-  return draw().then((failed) => {
+  return draw().then(() => {
     const entry = layers.get(name);
-    if (failed || !entry?.layer || !view.map.layers.includes(entry.layer)) {
+    if (entry?.error || !entry?.layer || !view.map.layers.includes(entry.layer)) {
       if (entry?.layer) view.map.remove(entry.layer);
       layers.delete(name);
       showList([...layers.values()]);
-      throw new Error(`could not draw ${name}: ${failed?.message ?? "the layer is not on the map"}`);
+      throw new Error(`could not draw ${name}: ${entry?.error?.message ?? "the layer is not on the map"}`);
     }
     return `Added ${name}: ${entry.info.row_count} ${entry.info.geometry_type} features.`;
   });
@@ -140,7 +140,7 @@ async function draw() {
   document.body.dataset.drawn = "";
   view.map.removeAll(); // also the layers of entries already replaced or cleared; the basemap is separate and stays
   const entries = [...layers.values()];
-  entries.forEach((entry, i) => { entry.color = COLORS[i % COLORS.length]; });
+  entries.forEach((entry, i) => { entry.color = COLORS[i % COLORS.length]; delete entry.error; });
   const added = entries.toSorted((a, b) => (DRAW_ORDER[a.info.geometry_type] ?? 2) - (DRAW_ORDER[b.info.geometry_type] ?? 2));
   for (const entry of added) {
     const { info, color } = entry;
@@ -155,9 +155,9 @@ async function draw() {
   }
   showList(entries);
   const mine = new Set(added.map((e) => e.layer));
-  try {
-    let extent;
-    for (const entry of added) {
+  let extent, failed;
+  for (const entry of added) { // one failed layer does not stop the others; addFile reads entry.error
+    try {
       const layerView = await view.whenLayerView(entry.layer);
       await new Promise((done) => { const check = () => layerView.updating ? setTimeout(check, 100) : done(); check(); });
       if (!entry.info.geometry_type) { // a GeoJSON file added by a page tool: the type is known only after it loads
@@ -167,14 +167,19 @@ async function draw() {
       entry.info.row_count ??= await entry.layer.queryFeatureCount();
       const part = (await entry.layer.queryExtent()).extent;
       if (part) extent = extent ? extent.union(part) : part;
+    } catch (error) {
+      entry.error = error;
+      failed ??= error;
     }
-    if (extent && added.every((e) => mine.has(e.layer))) await view.goTo(extent.width ? extent.expand(1.3) : { target: extent.center, zoom: 8 });
-    showList(entries);
-    if (added.every((e) => view.map.layers.includes(e.layer))) document.body.dataset.drawn = [...new Set(added.map((e) => e.info.format))].join(" ");
-  } catch (error) {
-    $("summary").textContent += `. The map could not draw it: ${error.message} ${error.details?.error?.message ?? error.details?.error ?? ""}`;
-    return error;
   }
+  try {
+    if (extent && added.every((e) => mine.has(e.layer))) await view.goTo(extent.width ? extent.expand(1.3) : { target: extent.center, zoom: 8 });
+  } catch (error) {
+    failed ??= error;
+  }
+  showList(entries);
+  if (failed) $("summary").textContent += `. The map could not draw it: ${failed.message} ${failed.details?.error?.message ?? failed.details?.error ?? ""}`;
+  else if (added.every((e) => view.map.layers.includes(e.layer))) document.body.dataset.drawn = [...new Set(added.map((e) => e.info.format))].join(" ");
 }
 function showList(entries) {
   $("result").hidden = false;

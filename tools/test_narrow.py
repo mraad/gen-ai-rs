@@ -120,6 +120,11 @@ class Narrow(unittest.TestCase):
         out = narrow.query(self.db, json.dumps([{"name": "a", "sql": "SELECT 1 AS x"}, {"name": "b", "sql": "SELECT n FROM result"}]))
         self.assertEqual(out["layers"][1]["rows"], [[7]])
 
+    def test_a_database_schema_named_temp_does_not_break_queries(self):
+        with duckdb.connect(self.db) as con:
+            con.execute("CREATE SCHEMA temp")
+        self.assertEqual(one(self.db, "SELECT count(*) AS n FROM Wells")["rows"], [[2]])
+
     def test_plain_query_writes_no_files(self):
         out = one(self.db, "SELECT count(*) AS n FROM Wells")
         self.assertEqual((out["columns"], out["rows"]), (["n"], [[2]]))

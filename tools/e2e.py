@@ -844,6 +844,13 @@ def test_map_tools(browser):
             out.hidden = await call("map_set_layer_visible", {name: "pipes", visible: false});
             out.drawn = gaitMap.map.layers.toArray().map((l) => [l.title, l.visible, l.geometryType]);
             out.summary = document.getElementById("summary").textContent;
+            // A layer that fails on a later redraw must not take a valid new layer down with it.
+            const fetchBefore = window.fetch;
+            window.fetch = (u, o) => window.__flaky && String(u?.url ?? u).includes(".geojson") ? Promise.reject(new TypeError("flaky")) : fetchBefore(u, o);
+            out.flaky = await call("map_add_geojson", {url: run + "wells.geojson", name: "flaky"});
+            window.__flaky = true;
+            out.afterFlaky = await call("map_add_geoparquet", {url: run + "wells.parquet", geometry_type: "point", name: "wells2"});
+            window.fetch = fetchBefore;
             out.cleared = await call("map_clear");
             out.after = [gaitMap.map.layers.length, document.querySelectorAll(".layer").length, gaitMap.map.basemap.baseLayers.length];
           }
@@ -862,7 +869,8 @@ def test_map_tools(browser):
             check("map tools: adding a layer with the same name replaces it on the map", out["wellLayers"] == 1 and str(out["again"]).startswith("Added wells"), out)
             check("map tools: a file that does not load is a tool error and leaves no layer", str(out["missingFile"]).startswith("error") and all(l["name"] != "missing" for l in out["layers"]), out)
             check("map tools: set_layer_visible hides a layer on the map", ["pipes", False, "polyline"] in out["drawn"] and ["wells", True, "point"] in out["drawn"], out["drawn"])
-            check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "2 layers" in out["cleared"], out)
+            check("map tools: a layer that fails on redraw does not remove a valid new layer", str(out["flaky"]).startswith("Added flaky") and str(out["afterFlaky"]).startswith("Added wells2"), [out["flaky"], out["afterFlaky"]])
+            check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "layers" in out["cleared"], out)
         else:
             print(f"SKIP  map tools: file checks need {MAP_FIXTURES}")
 
