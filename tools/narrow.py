@@ -88,17 +88,19 @@ def run_one(con, art, name, sql, print_rows, fmt):
     sql = sql.strip().rstrip(";")
     columns = con.execute(f"DESCRIBE SELECT * FROM (\n{sql}\n)").fetchall()  # fails unless SELECT
     geo = [c[0] for c in columns if str(c[1]).startswith("GEOMETRY")]
-    # GeoJSON needs each geometry as text; GeoParquet is written by COPY, so the rows only need the type.
-    convert = "ST_AsGeoJSON({})" if fmt == "geojson" else "ST_GeometryType({})::VARCHAR"
-    replace = ", ".join(convert.format(f'"{g}"') + f' AS "{g}"' for g in geo)
-    cur = con.execute(f"SELECT * {f'REPLACE ({replace})' if geo else ''} FROM (\n{sql}\n)")
-    names = [d[0] for d in cur.description]
-    rows = cur.fetchmany(MAX_ROWS + 1)
+    # The query runs once, into a temporary table; the rows and the file come from it. One extra row tells if it was cut.
+    con.execute(f"CREATE OR REPLACE TEMP TABLE result AS SELECT * FROM (\n{sql}\n) LIMIT {MAX_ROWS + 1}")
     if geo and fmt == "parquet":  # GeoParquet V1 for the ArcGIS ParquetLayer: one column named geometry, DOUBLE not DECIMAL
         pick = [f'"{c[0]}" AS geometry' if c[0] == geo[0] else None if c[0] in geo else
                 f'CAST("{c[0]}" AS DOUBLE) AS "{c[0]}"' if str(c[1]).startswith("DECIMAL") else f'"{c[0]}"' for c in columns]
-        con.execute(f"COPY (SELECT {', '.join(p for p in pick if p)} FROM (\n{sql}\n) LIMIT {MAX_ROWS}) TO '{art}/{name}.parquet' "
+        con.execute(f"COPY (SELECT {', '.join(p for p in pick if p)} FROM result LIMIT {MAX_ROWS}) TO '{art}/{name}.parquet' "
                     "(FORMAT PARQUET, COMPRESSION SNAPPY, GEOPARQUET_VERSION 'V1')")
+    # GeoJSON needs each geometry as text; GeoParquet is already written, so the rows only need the type.
+    convert = "ST_AsGeoJSON({})" if fmt == "geojson" else "ST_GeometryType({})::VARCHAR"
+    replace = ", ".join(convert.format(f'"{g}"') + f' AS "{g}"' for g in geo)
+    cur = con.execute(f"SELECT * {f'REPLACE ({replace})' if geo else ''} FROM result")
+    names = [d[0] for d in cur.description]
+    rows = cur.fetchall()
     truncated = len(rows) > MAX_ROWS
     rows = rows[:MAX_ROWS]
     plain = [n for n in names if n not in geo]

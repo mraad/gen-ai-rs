@@ -16,7 +16,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-ALLOWED_PATH = re.compile(r"^/openai/deployments/[\w.\-]+/(chat/completions|embeddings)$")
+ALLOWED_PATH = re.compile(r"^/openai/deployments/[\w.\-]+/chat/completions$")
 MAX_BODY = 10 * 1024 * 1024
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
