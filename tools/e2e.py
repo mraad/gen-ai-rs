@@ -853,6 +853,12 @@ def test_map_tools(browser):
             window.fetch = fetchBefore;
             out.cleared = await call("map_clear");
             out.after = [gaitMap.map.layers.length, document.querySelectorAll(".layer").length, gaitMap.map.basemap.baseLayers.length];
+            // A clear while an add is still drawing wins: the add fails and the page does not show the layer again.
+            const pendingAdd = call("map_add_geojson", {url: run + "wells.geojson", name: "late"}).then(String, (e) => "error " + e);
+            await call("map_clear");
+            out.lateAdd = String(await pendingAdd);
+            await new Promise((r) => setTimeout(r, 500));
+            out.lateState = [gaitMap.map.layers.length, document.querySelectorAll(".layer").length, document.getElementById("result").hidden];
           }
           done(out);
         """ % (MAP_RUN, "true" if files else "false"))
@@ -870,6 +876,7 @@ def test_map_tools(browser):
             check("map tools: a file that does not load is a tool error and leaves no layer", str(out["missingFile"]).startswith("error") and all(l["name"] != "missing" for l in out["layers"]), out)
             check("map tools: set_layer_visible hides a layer on the map", ["pipes", False, "polyline"] in out["drawn"] and ["wells", True, "point"] in out["drawn"], out["drawn"])
             check("map tools: a layer that fails on redraw does not remove a valid new layer", str(out["flaky"]).startswith("Added flaky") and str(out["afterFlaky"]).startswith("Added wells2"), [out["flaky"], out["afterFlaky"]])
+            check("map tools: map_clear during a pending add wins and nothing comes back", str(out["lateAdd"]).startswith("error") and out["lateState"] == [0, 0, True], [out["lateAdd"], out["lateState"]])
             check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "layers" in out["cleared"], out)
         else:
             print(f"SKIP  map tools: file checks need {MAP_FIXTURES}")

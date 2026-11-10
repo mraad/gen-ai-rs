@@ -44,6 +44,7 @@ const view = new MapView({
 window.gaitMap = view; // for tests and the browser console
 
 let session, busy = false, format = "geojson", live, turn = 0, batch = -1;
+let drawId = 0, drawing = Promise.resolve(); // a newer draw or a clear makes an older draw stale; it then leaves the page alone
 const layers = new globalThis.Map(); // the SDK import shadows Map. name -> { info, layer, color, visible }
 
 // ---- page tools (WebMCP): the agent acts on the map the user sees. modelcontext.js fills in the API when the browser has none.
@@ -56,17 +57,19 @@ function addFile(format, { url, name, geometry_type }) {
   if (href.origin !== location.origin) throw new Error("the file must be on this page's origin, for example an /artifacts/... URL from a query");
   name ||= href.pathname.split("/").pop().replace(/\.[^.]*$/, "") || "layer";
   if (batch !== turn) { layers.clear(); batch = turn; } // same rule as query results: a new question starts a new map
-  layers.set(name, { info: { name, format, url: href.pathname + href.search, geometry_type, row_count: null }, visible: true });
-  return draw().then(() => {
-    const entry = layers.get(name);
-    if (entry?.error || !entry?.layer || !view.map.layers.includes(entry.layer)) {
-      if (entry?.layer) view.map.remove(entry.layer);
+  const entry = { info: { name, format, url: href.pathname + href.search, geometry_type, row_count: null }, visible: true };
+  layers.set(name, entry);
+  return (async () => {
+    for (let pending = draw(), seen; pending !== seen; pending = drawing) { seen = pending; await pending; } // wait for the newest draw
+    if (layers.get(name) !== entry) throw new Error(`could not draw ${name}: the layer was replaced or cleared`);
+    if (entry.error || !entry.layer || !view.map.layers.includes(entry.layer)) {
+      if (entry.layer) view.map.remove(entry.layer);
       layers.delete(name);
       showList([...layers.values()]);
-      throw new Error(`could not draw ${name}: ${entry?.error?.message ?? "the layer is not on the map"}`);
+      throw new Error(`could not draw ${name}: ${entry.error?.message ?? "the layer is not on the map"}`);
     }
     return `Added ${name}: ${entry.info.row_count} ${entry.info.geometry_type} features.`;
-  });
+  })();
 }
 tool("map_add_geojson", "Draw a GeoJSON file from this site on the map, and zoom to it. Replaces a layer with the same name.",
   { url: { type: "string", description: "Same-origin URL, for example /artifacts/RUN/wells.geojson" }, name: { type: "string" } },
@@ -136,7 +139,10 @@ function readToolResult(reply) {
   draw();
 }
 
-async function draw() {
+function draw() {
+  return drawing = drawOnce(++drawId);
+}
+async function drawOnce(me) {
   document.body.dataset.drawn = "";
   view.map.removeAll(); // also the layers of entries already replaced or cleared; the basemap is separate and stays
   const entries = [...layers.values()];
@@ -154,29 +160,34 @@ async function draw() {
     view.map.add(entry.layer);
   }
   showList(entries);
-  const mine = new Set(added.map((e) => e.layer));
   let extent, failed;
   for (const entry of added) { // one failed layer does not stop the others; addFile reads entry.error
+    if (me !== drawId) return;
+    const { layer } = entry; // a newer draw replaces entry.layer
     try {
-      const layerView = await view.whenLayerView(entry.layer);
+      const layerView = await view.whenLayerView(layer);
       await new Promise((done) => { const check = () => layerView.updating ? setTimeout(check, 100) : done(); check(); });
+      if (me !== drawId) return;
       if (!entry.info.geometry_type) { // a GeoJSON file added by a page tool: the type is known only after it loads
-        entry.info.geometry_type = entry.layer.geometryType;
-        entry.layer.renderer = { type: "simple", symbol: symbol(entry.layer.geometryType, entry.color) };
+        entry.info.geometry_type = layer.geometryType;
+        layer.renderer = { type: "simple", symbol: symbol(layer.geometryType, entry.color) };
       }
-      entry.info.row_count ??= await entry.layer.queryFeatureCount();
-      const part = (await entry.layer.queryExtent()).extent;
+      entry.info.row_count ??= await layer.queryFeatureCount();
+      const part = (await layer.queryExtent()).extent;
       if (part) extent = extent ? extent.union(part) : part;
     } catch (error) {
+      if (me !== drawId) return;
       entry.error = error;
       failed ??= error;
     }
   }
+  if (me !== drawId) return;
   try {
-    if (extent && added.every((e) => mine.has(e.layer))) await view.goTo(extent.width ? extent.expand(1.3) : { target: extent.center, zoom: 8 });
+    if (extent) await view.goTo(extent.width ? extent.expand(1.3) : { target: extent.center, zoom: 8 });
   } catch (error) {
     failed ??= error;
   }
+  if (me !== drawId) return;
   showList(entries);
   if (failed) $("summary").textContent += `. The map could not draw it: ${failed.message} ${failed.details?.error?.message ?? failed.details?.error ?? ""}`;
   else if (added.every((e) => view.map.layers.includes(e.layer))) document.body.dataset.drawn = [...new Set(added.map((e) => e.info.format))].join(" ");
@@ -365,6 +376,7 @@ async function send(question) {
   setBusy(false); setStatus(unsaved ? `Not saved: ${unsaved}` : failed ? "Stopped" : "Ready", failed || unsaved ? "error" : "ok");
 }
 function clearMap() {
+  drawId++; // a pending draw must not list the cleared layers again
   view.map.removeAll(); // every added layer; the basemap is separate and stays
   view.closePopup?.();
   layers.clear(); $("layerlist").replaceChildren(); $("result").hidden = true; document.body.dataset.drawn = "";
