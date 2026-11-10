@@ -98,6 +98,33 @@ class Narrow(unittest.TestCase):
         self.assertEqual(len(json.loads((self.art / "result.geojson").read_text())["features"]), 25)
         self.assertEqual(len(one(self.db, "SELECT OBJECTID FROM Many")["rows"]), 25)  # no geometry: the rows themselves
 
+    def test_geoparquet_runs_the_query_once_and_marks_a_cut(self):
+        q = lambda sql: narrow.query(self.db, json.dumps([{"name": "result", "sql": sql}]), "parquet")["layers"][0]
+        out = q("SELECT random() AS r, ST_Point(1, 2) AS geometry")
+        with duckdb.connect() as con:
+            con.execute("LOAD spatial")
+            in_file = con.execute(f"SELECT r FROM '{self.art / 'result.parquet'}'").fetchone()[0]
+        self.assertEqual(out["rows"][0][0], in_file)  # a second run would give another random number
+        old, narrow.MAX_ROWS = narrow.MAX_ROWS, 3
+        self.addCleanup(setattr, narrow, "MAX_ROWS", old)
+        out = q("SELECT i AS OBJECTID, ST_Point(i, 1) AS geometry FROM range(5) t(i)")
+        with duckdb.connect() as con:
+            con.execute("LOAD spatial")
+            count = con.execute(f"SELECT count(*) FROM '{self.art / 'result.parquet'}'").fetchone()[0]
+        self.assertEqual((out["row_count"], out["truncated"], count), (3, True, 3))
+        self.assertEqual(sorted(p.name for p in self.art.iterdir()), ["result.parquet"])  # no .tmp left
+
+    def test_a_database_table_named_result_is_not_hidden(self):
+        with duckdb.connect(self.db) as con:
+            con.execute("CREATE TABLE result AS SELECT 7 AS n")
+        out = narrow.query(self.db, json.dumps([{"name": "a", "sql": "SELECT 1 AS x"}, {"name": "b", "sql": "SELECT n FROM result"}]))
+        self.assertEqual(out["layers"][1]["rows"], [[7]])
+
+    def test_a_database_schema_named_temp_does_not_break_queries(self):
+        with duckdb.connect(self.db) as con:
+            con.execute("CREATE SCHEMA temp")
+        self.assertEqual(one(self.db, "SELECT count(*) AS n FROM Wells")["rows"], [[2]])
+
     def test_plain_query_writes_no_files(self):
         out = one(self.db, "SELECT count(*) AS n FROM Wells")
         self.assertEqual((out["columns"], out["rows"]), (["n"], [[2]]))

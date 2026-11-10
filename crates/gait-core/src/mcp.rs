@@ -82,6 +82,39 @@ impl Mcp {
     }
 }
 
+/// Plain ASCII names, so a name fits a header unchanged.
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
+/// Text for the model from an MCP tool result; `isError` becomes a tool error.
+pub fn result_text(result: &Value) -> Result<String> {
+    let text = if let Some(value) = result.get("structuredContent") {
+        value.to_string()
+    } else {
+        let content = result["content"]
+            .as_array()
+            .ok_or_else(|| Error::Tool("MCP tool result has no content".into()))?;
+        content
+            .iter()
+            .map(|part| {
+                part["text"]
+                    .as_str()
+                    .unwrap_or("[non-text MCP content omitted]")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    if result["isError"] == true {
+        return Err(Error::Tool(text));
+    }
+    Ok(text)
+}
+
 pub async fn tools(url: String, http: Rc<dyn Http>, trace: &Trace) -> Result<Vec<ToolDef>> {
     let mcp = Rc::new(Mcp {
         url,
@@ -103,13 +136,7 @@ pub async fn tools(url: String, http: Rc<dyn Http>, trace: &Trace) -> Result<Vec
         for spec in list {
             let name = spec["name"]
                 .as_str()
-                .filter(|name| {
-                    !name.is_empty()
-                        && name.len() <= 128
-                        && name
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-                })
+                .filter(|name| valid_name(name))
                 .ok_or_else(|| Error::Tool("MCP tool has an invalid name".into()))?
                 .to_owned();
             let schema = spec["inputSchema"].clone();
@@ -138,26 +165,7 @@ pub async fn tools(url: String, http: Rc<dyn Http>, trace: &Trace) -> Result<Vec
                         let result = remote
                             .request("tools/call", json!({"name": name, "arguments": args}))
                             .await?;
-                        let text = if let Some(value) = result.get("structuredContent") {
-                            value.to_string()
-                        } else {
-                            let content = result["content"].as_array().ok_or_else(|| {
-                                Error::Tool("MCP tool result has no content".into())
-                            })?;
-                            content
-                                .iter()
-                                .map(|part| {
-                                    part["text"]
-                                        .as_str()
-                                        .unwrap_or("[non-text MCP content omitted]")
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        };
-                        if result["isError"] == true {
-                            return Err(Error::Tool(text));
-                        }
-                        Ok(ToolOutput::Text(text))
+                        result_text(&result).map(ToolOutput::Text)
                     })
                 }),
             });

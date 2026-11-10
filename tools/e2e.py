@@ -2,6 +2,7 @@
 """Exercise the release WASM in isolated Chrome against local MCP and LLM fixtures. Standard library only."""
 
 import argparse
+import contextlib
 import base64
 import json
 import os
@@ -414,6 +415,86 @@ def test_adapters(browser, origin):
     check("host callback failure does not stop loop", out["message"] == "answer", out)
 
 
+def test_turn_limit(browser):
+    out = browser.run(STUB + """
+      const looping = () => {
+        let calls = 0;
+        return {count: () => calls, chat: () => { calls += 1; return asks("multiply", {a: 1, b: 2}); }};
+      };
+      const a = looping(), b = looping();
+      const byDefault = await (await create({chat: a.chat})).send("loop");
+      const limited = await (await create({chat: b.chat, maxModelTurns: 3})).send("loop");
+      const bad = [];
+      for (const v of [0, 1.5, 1001, "5"]) bad.push(await create({maxModelTurns: v}).then(() => "accepted", (e) => String(e)));
+      done({byDefault, limited, calls: [a.count(), b.count()], bad});
+    """)
+    check("turn limit: 50 model calls by default", out["calls"][0] == 50 and out["byDefault"]["stopReason"] == "max_model_turns", out)
+    check("turn limit: maxModelTurns sets it", out["calls"][1] == 3 and out["limited"]["stopReason"] == "max_model_turns", out)
+    check("turn limit: a bad maxModelTurns rejects creation", all("maxModelTurns must be" in b for b in out["bad"]), out["bad"])
+
+
+def test_page_tools(browser):
+    out = browser.run(STUB + """
+      const mc = document.modelContext, events = [], seen = [];
+      const register = (name, execute, signal) => mc.registerTool({name, description: name, inputSchema: {type: "object", properties: {n: {type: "number"}}}, execute}, {signal});
+      const off = new AbortController();
+      await register("t_echo", async ({n}) => ({content: [{type: "text", text: `echo ${n}`}]}), off.signal);
+      await register("t_throw", async () => { throw new Error("page says no"); });
+      let aborted = null;
+      await register("t_slow", (_, {signal}) => new Promise((resolve) => signal.addEventListener("abort", () => { aborted = signal.aborted; resolve("late"); })));
+      const duplicate = await register("t_echo", async () => 1).then(() => "accepted", (e) => e.name);
+      const plan = [];
+      const session = await create({onEvent: (e) => events.push(e), chat: (request) => {
+        seen.push(request.tools.map((t) => t.function.name));
+        const last = request.messages.at(-1);
+        if (last.role === "tool") return says(last.content);
+        return asks(plan.shift(), {n: 5});
+      }});
+      plan.push("t_echo");
+      const echo = await session.send("echo");
+      plan.push("t_throw");
+      const thrown = await session.send("throw");
+      plan.push("t_slow");
+      const pending = session.send("slow");
+      while (!events.some((e) => e.category === "tool_start" && e.message === "t_slow")) await sleep(5);
+      session.cancel();
+      const cancelled = await pending;
+      await sleep(20);
+      off.abort();
+      await register("t_late", async () => "late tool ran");
+      plan.push("t_late");
+      const late = await session.send("late");
+      const listed = (await mc.getTools()).map((t) => [t.name, typeof t.inputSchema]);
+      let parseRuns = 0;
+      await register("t_parse", async () => { parseRuns += 1; throw new Error("Failed to parse input arguments"); });
+      plan.push("t_parse");
+      const parse = await session.send("parse");
+      const realGet = mc.getTools;
+      mc.getTools = () => new Promise(() => {});
+      const stuck = session.send("stuck");
+      await sleep(50);
+      session.cancel();
+      const unstuck = await Promise.race([stuck, sleep(2000).then(() => "hung")]);
+      delete mc.getTools;
+      if (mc.getTools !== realGet) mc.getTools = realGet;
+      plan.push("t_late");
+      const after = await session.send("after");
+      done({echo, thrown, cancelled, aborted, late, duplicate, seen, listed, parseRuns, parse, unstuck, after, shim: mc.shim === true});
+    """)
+    check("page tools: a registered tool runs and its MCP content reaches the model", out["echo"]["message"] == "echo 5", out["echo"])
+    # Chrome's native WebMCP replaces the thrown message with a generic one; the shim keeps it.
+    shim = out["shim"]
+    check("page tools: a throwing tool returns to the model as a tool error", "Tool error:" in out["thrown"]["message"] and (not shim or "page says no" in out["thrown"]["message"]), out["thrown"])
+    check("page tools: cancel aborts the signal the running tool sees", out["cancelled"]["cancelled"] and out["aborted"] is True, out)
+    check("page tools: tools are listed each turn; an unregistered tool is gone", "t_late" in out["seen"][-1] and "t_echo" not in out["seen"][-1] and "t_echo" in out["seen"][0], out["seen"])
+    check("page tools: a tool registered after create runs", out["late"]["message"] == "late tool ran", out["late"])
+    check("page tools: duplicate names reject and schemas are JSON strings", out["duplicate"] == "InvalidStateError" and ["t_late", "string"] in out["listed"], out)
+    check("page tools: a tool that throws a parse-like message runs once, never retried", out["parseRuns"] == 1 and "Tool error:" in out["parse"]["message"], out)
+    check("page tools: Stop ends a turn whose getTools() never settles, and the next turn works",
+          out["unstuck"] != "hung" and out["unstuck"]["cancelled"] and out["after"]["message"] == "late tool ran", out)
+    check("page tools: the demo page offers page_read_messages next to MCP tools", all({"page_read_messages", "multiply"} <= set(s) for s in out["seen"]), out["seen"])
+
+
 def test_page(browser, origin):
     browser.goto(origin + "/")
     check("page loads WASM", browser.wait_ready() > 0)
@@ -425,6 +506,13 @@ def test_page(browser, origin):
       done({text:document.getElementById('messages').textContent, state:window.gait.session.state()});
     """)
     check("page: MCP tool answer is rendered", "42" in out["text"], out)
+    out = browser.run(STUB + """
+      document.getElementById('prompt').value = 'What is on the page?';
+      document.getElementById('chat').requestSubmit();
+      while (document.getElementById('status').textContent !== 'Ready.') await sleep(10);
+      done([...document.querySelectorAll('.message.assistant')].pop().textContent);
+    """)
+    check("page: the mock model reads the chat through the page_read_messages page tool", out.startswith("[mock] The tool returned ") and "user: What is on the page?" in out, out)
     tool_row = browser.run("done([...document.querySelectorAll('#trace tr')].find(row => row.children[1].textContent === 'tool_start')?.children[2].textContent)")
     check("page: tool start displays parameter names and values", 'multiply {"a":6,"b":7}' == tool_row, tool_row)
     browser.goto(origin + "/")
@@ -641,24 +729,38 @@ MAP_STATE = """done({
 })"""
 
 
-def test_map(browser):
-    """map.html needs the network: it loads the ArcGIS Maps SDK and the basemap tiles."""
-    upstream, model = serve(FakeRwee), serve(FakeMapModel)
+@contextlib.contextmanager
+def map_gateway(page, *also):
+    """The real gateway in front of a fake mcp-rwee; yields the gateway's port, then stops it and `also`."""
+    upstream = serve(FakeRwee)
     cfg = {"mode": "narrow", "database": "/db/demo.duckdb", "layers": "/db/Layers.json", "timeout": 10,
            "name": "demo", "about": "demo dataset", "skill": "demo-sql"}
-    page = {"title": "Test map", "placeholder": "Show the wells", "center": [3, 58], "zoom": 5}
     up = gateway.Upstream(f"http://127.0.0.1:{upstream.server_address[1]}", MAP_TOKEN, 10)
     gw = serve(partial(gateway.Handler, directory=str(WEB), upstream=up, cfg=cfg, page=page))
     try:
-        browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.__errors = []; addEventListener('error', (e) => __errors.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errors.push(String(e.reason)));"})
-        browser.goto(f"http://localhost:{gw.server_address[1]}/map.html")
+        yield gw.server_address[1]
+    finally:
+        for server in (gw, upstream, *also):
+            server.shutdown()
+            server.server_close()
 
-        def wait(condition, seconds):
-            end = time.monotonic() + seconds
-            while not condition(state := browser.run(MAP_STATE)) and time.monotonic() < end:
-                time.sleep(0.2)
-            return state
-        state = wait(lambda s: s["phase"] in ("Ready",) or s["phase"].startswith("Could not"), 60)
+
+def wait(browser, condition, seconds):
+    """Poll the map page state until condition(state) holds or time runs out; return the last state."""
+    end = time.monotonic() + seconds
+    while not condition(state := browser.run(MAP_STATE)) and time.monotonic() < end:
+        time.sleep(0.2)
+    return state
+
+
+def test_map(browser):
+    """map.html needs the network: it loads the ArcGIS Maps SDK and the basemap tiles."""
+    model = serve(FakeMapModel)
+    page = {"title": "Test map", "placeholder": "Show the wells", "center": [3, 58], "zoom": 5}
+    with map_gateway(page, model) as port:
+        browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.__errors = []; addEventListener('error', (e) => __errors.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errors.push(String(e.reason)));"})
+        browser.goto(f"http://localhost:{port}/map.html")
+        state = wait(browser, lambda s: s["phase"] in ("Ready",) or s["phase"].startswith("Could not"), 60)
         check("map: page loads the ArcGIS SDK and the WASM agent", state["phase"] == "Ready", state)
         shown = browser.run("""done([document.title, document.getElementById("title").textContent, document.getElementById("prompt").placeholder,
           Math.round(gaitMap.center.longitude), Math.round(gaitMap.center.latitude), gaitMap.zoom])""")
@@ -666,14 +768,14 @@ def test_map(browser):
         browser.run(f"""document.getElementById("model").value = "openai/test";
           document.getElementById("base").value = "http://localhost:{model.server_address[1]}";
           document.getElementById("connect").click(); done()""")
-        state = wait(lambda s: s["phase"] == "Ready", 20)
+        state = wait(browser, lambda s: s["phase"] == "Ready", 20)
         names = {"geojson": "GeoJSON", "parquet": "GeoParquet"}
         for fmt in ("parquet", "geojson"):
             FakeRwee.formats = []
             browser.run(f"""document.querySelector("[data-format={fmt}]").click();
               document.getElementById("prompt").value = {json.dumps(MAP_QUESTION)};
               document.getElementById("chat").requestSubmit(); done()""")
-            state = wait(lambda s: s["drawn"] == fmt and s["phase"] == "Ready" or s["phase"] == "Stopped", 60)
+            state = wait(browser, lambda s: s["drawn"] == fmt and s["phase"] == "Ready" or s["phase"] == "Stopped", 60)
             check(f"map: {names[fmt]} selected, the gateway asks the server for that format only", FakeRwee.formats == [fmt], FakeRwee.formats)
             check(f"map: {names[fmt]} layers are drawn from {fmt} files", state["drawn"] == fmt and state["summary"].startswith("2 layers, 3 features")
                   and [l[1:3] for l in state["layers"]] == [["2 point", names[fmt]], ["1 polyline", names[fmt]]]
@@ -688,29 +790,96 @@ def test_map(browser):
         state = browser.run(MAP_STATE)
         check("map: the format switch applies to the next question and does not redraw", state["pressed"] == "parquet" and state["drawn"] == "geojson"
               and all(l[3].endswith(".geojson") for l in state["layers"]), state)
-        browser.goto(f"http://localhost:{gw.server_address[1]}/map.html")
-        wait(lambda s: s["phase"] == "Ready" or s["phase"].startswith("Could not"), 60)
+        browser.goto(f"http://localhost:{port}/map.html")
+        wait(browser, lambda s: s["phase"] == "Ready" or s["phase"].startswith("Could not"), 60)
         shown = browser.run('done(document.querySelectorAll(".message.user").length)')
         check("map: the conversation survives a reload", shown == 2, shown)
         browser.run(f"""document.getElementById("model").value = "openai/test";
           document.getElementById("base").value = "http://localhost:{model.server_address[1]}";
           document.getElementById("connect").click(); done()""")
-        wait(lambda s: s["phase"] == "Ready", 20)
+        wait(browser, lambda s: s["phase"] == "Ready", 20)
         browser.run(f"""document.getElementById("prompt").value = {json.dumps(MAP_QUESTION)};
           document.getElementById("chat").requestSubmit(); done()""")
-        drawn = wait(lambda s: s["drawn"] == "geojson" and s["phase"] == "Ready" or s["phase"] == "Stopped", 60)
+        drawn = wait(browser, lambda s: s["drawn"] == "geojson" and s["phase"] == "Ready" or s["phase"] == "Stopped", 60)
         before = browser.run("done(gaitMap.map.layers.length)")
         check("map: the conversation is saved under the dataset's key", browser.run('done(localStorage.getItem("gait-map-state:Test map") !== null)'))
         browser.run('document.getElementById("clear").click(); done()')
-        state = wait(lambda s: s["phase"] == "Cleared", 10)
+        state = wait(browser, lambda s: s["phase"] == "Cleared", 10)
         gone = browser.run("""done({layers: gaitMap.map.layers.length, basemap: gaitMap.map.basemap.baseLayers.length + gaitMap.map.basemap.referenceLayers.length,
           messages: document.querySelectorAll(".message").length, listed: document.querySelectorAll(".layer").length, saved: localStorage.getItem("gait-map-state:Test map")})""")
         check("map: Clear removes every added layer and keeps the basemap", before == 2 and gone["layers"] == 0 and gone["basemap"] == 2 and gone["listed"] == 0, (drawn, before, gone))
         check("map: Clear removes the conversation and the saved copy", gone["messages"] == 0 and gone["saved"] is None, (gone, state))
-    finally:
-        for server in (gw, upstream, model):
-            server.shutdown()
-            server.server_close()
+
+
+def test_map_tools(browser):
+    """The map page registers its page tools; needs the network for the ArcGIS SDK, not fixtures/map."""
+    with map_gateway({"center": [3, 58], "zoom": 5}) as port:
+        browser.goto(f"http://localhost:{port}/map.html")
+        state = wait(browser, lambda s: s["phase"] == "Ready", 60)
+        check("map tools: the map page is ready (needs the network for the ArcGIS SDK)", state["phase"] == "Ready", state)
+        if state["phase"] != "Ready":
+            return
+        files = (MAP_FIXTURES / "wells.geojson").is_file()
+        out = browser.run("""
+          const mc = document.modelContext, listed = await mc.getTools(), names = listed.map((t) => t.name).sort();
+          // Chrome 153's native executeTool takes the input as a JSON string; the spec and the shim take an object.
+          const shim = mc.shim === true;
+          const call = (name, input = {}) => mc.executeTool(listed.find((t) => t.name === name), shim ? input : JSON.stringify(input))
+            .then((v) => { try { return JSON.parse(v); } catch { return v; } }, (e) => `error ${e.name}: ${e.message}`);
+          const run = "/artifacts/%s/", out = {names, shim};
+          out.zoom = await call("map_set_zoom", {zoom: 6, lon: 10, lat: 50});
+          out.got = await call("map_get_zoom");
+          out.extent = await call("map_set_extent", {xmin: 2, ymin: 57, xmax: 4, ymax: 60});
+          out.gotExtent = await call("map_get_extent");
+          out.badExtent = await call("map_set_extent", {xmin: 4, ymin: 57, xmax: 2, ymax: 60});
+          out.missing = await call("map_set_layer_visible", {name: "nope", visible: false});
+          out.foreign = await call("map_add_geojson", {url: "https://example.com/a.geojson"});
+          if (%s) {
+            out.wells = await call("map_add_geojson", {url: run + "wells.geojson"});
+            out.pipes = await call("map_add_geoparquet", {url: run + "pipes.parquet", geometry_type: "polyline"});
+            out.again = await call("map_add_geojson", {url: run + "wells.geojson"});
+            out.wellLayers = gaitMap.map.layers.toArray().filter((l) => l.title === "wells").length;
+            out.missingFile = await call("map_add_geojson", {url: run + "missing.geojson"});
+            out.layers = await call("map_list_layers");
+            out.hidden = await call("map_set_layer_visible", {name: "pipes", visible: false});
+            out.drawn = gaitMap.map.layers.toArray().map((l) => [l.title, l.visible, l.geometryType]);
+            out.summary = document.getElementById("summary").textContent;
+            // A layer that fails on a later redraw must not take a valid new layer down with it.
+            const fetchBefore = window.fetch;
+            window.fetch = (u, o) => window.__flaky && String(u?.url ?? u).includes(".geojson") ? Promise.reject(new TypeError("flaky")) : fetchBefore(u, o);
+            out.flaky = await call("map_add_geojson", {url: run + "wells.geojson", name: "flaky"});
+            window.__flaky = true;
+            out.afterFlaky = await call("map_add_geoparquet", {url: run + "wells.parquet", geometry_type: "point", name: "wells2"});
+            window.fetch = fetchBefore;
+            out.cleared = await call("map_clear");
+            out.after = [gaitMap.map.layers.length, document.querySelectorAll(".layer").length, gaitMap.map.basemap.baseLayers.length];
+            // A clear while an add is still drawing wins: the add fails and the page does not show the layer again.
+            const pendingAdd = call("map_add_geojson", {url: run + "wells.geojson", name: "late"}).then(String, (e) => "error " + e);
+            await call("map_clear");
+            out.lateAdd = String(await pendingAdd);
+            await new Promise((r) => setTimeout(r, 500));
+            out.lateState = [gaitMap.map.layers.length, document.querySelectorAll(".layer").length, document.getElementById("result").hidden];
+          }
+          done(out);
+        """ % (MAP_RUN, "true" if files else "false"))
+        check("map tools: the map page registers its page tools", out["names"] == ["map_add_geojson", "map_add_geoparquet", "map_clear", "map_get_extent",
+              "map_get_zoom", "map_list_layers", "map_set_extent", "map_set_layer_visible", "map_set_zoom"], out["names"])
+        check("map tools: set and get zoom move and read the live view", out["got"]["zoom"] == 6 and [round(c) for c in out["got"]["center"]] == [10, 50], out)
+        e, g = out["extent"], out["gotExtent"]
+        check("map tools: set and get extent use WGS84 and the view covers the asked extent", isinstance(e, dict) and e == g and e["xmin"] <= 2 and e["ymin"] <= 57 and e["xmax"] >= 4 and e["ymax"] >= 60 and e["xmax"] - e["xmin"] < 10, out)
+        check("map tools: a bad extent, an unknown layer and a foreign file URL are errors", all(str(out[k]).startswith("error") for k in ("badExtent", "missing", "foreign")), out)
+        if files:
+            check("map tools: GeoJSON and GeoParquet files from this origin are drawn and listed", out["layers"] == [
+                {"name": "wells", "features": 2, "geometry": "point", "visible": True}, {"name": "pipes", "features": 1, "geometry": "polyline", "visible": True}]
+                and out["summary"].startswith("2 layers, 3 features"), out)
+            check("map tools: adding a layer with the same name replaces it on the map", out["wellLayers"] == 1 and str(out["again"]).startswith("Added wells"), out)
+            check("map tools: a file that does not load is a tool error and leaves no layer", str(out["missingFile"]).startswith("error") and all(l["name"] != "missing" for l in out["layers"]), out)
+            check("map tools: set_layer_visible hides a layer on the map", ["pipes", False, "polyline"] in out["drawn"] and ["wells", True, "point"] in out["drawn"], out["drawn"])
+            check("map tools: a layer that fails on redraw does not remove a valid new layer", str(out["flaky"]).startswith("Added flaky") and str(out["afterFlaky"]).startswith("Added wells2"), [out["flaky"], out["afterFlaky"]])
+            check("map tools: map_clear during a pending add wins and nothing comes back", str(out["lateAdd"]).startswith("error") and out["lateState"] == [0, 0, True], [out["lateAdd"], out["lateState"]])
+            check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "layers" in out["cleared"], out)
+        else:
+            print(f"SKIP  map tools: file checks need {MAP_FIXTURES}")
 
 
 def run_wasm_tests(browser, url):
@@ -747,9 +916,12 @@ def main():
             test_cancel_and_busy(browser)
             test_compaction(browser)
             test_adapters(browser, origin)
+            test_turn_limit(browser)
+            test_page_tools(browser)
             test_page(browser, origin)
             test_trace_redaction(browser)
             test_page_stop_and_recovery(browser, origin)
+            test_map_tools(browser)
             if (MAP_FIXTURES / "layers.json").is_file():
                 test_map(browser)
             else:

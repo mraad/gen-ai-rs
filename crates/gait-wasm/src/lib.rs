@@ -1,6 +1,6 @@
 //! Browser fetch, host events, and a single-session API.
 use async_trait::async_trait;
-use gait_core::agent::{Agent, Ctx};
+use gait_core::agent::{Agent, Ctx, ToolDef, ToolOutput};
 use gait_core::cancel::Cancel;
 use gait_core::dialog::{Dialog, Message};
 use gait_core::kb::Kb;
@@ -219,6 +219,85 @@ impl LlmClient for JsLlm {
     }
 }
 
+/// Tools the page registered with WebMCP (`document.modelContext.registerTool`), listed each
+/// turn because they follow page state. No `modelContext` means no page tools.
+async fn page_tools(trace: &Trace) -> Vec<ToolDef> {
+    let context = prop(&prop(&js_sys::global(), "document"), "modelContext");
+    let Some(get) = function(&context, "getTools") else {
+        return Vec::new();
+    };
+    let listed = match async { settle(&get.call0(&context)?).await }.await {
+        Ok(listed) => js_sys::Array::from(&listed),
+        Err(error) => {
+            trace.event(
+                "tool_rejected",
+                format!("page tools: {}", js_message(&error)),
+            );
+            return Vec::new();
+        }
+    };
+    let mut tools = Vec::new();
+    for tool in listed.iter() {
+        let name = string(&tool, "name").unwrap_or_default();
+        // The spec gives the schema as a JSON string; an empty one means no arguments.
+        let parameters = match string(&tool, "inputSchema") {
+            Some(text) => serde_json::from_str(&text).ok().filter(Value::is_object),
+            None => Some(json!({"type": "object", "properties": {}})),
+        };
+        let Some(parameters) = parameters else {
+            trace.event(
+                "tool_rejected",
+                format!("{name}: page tool has a bad input schema"),
+            );
+            continue;
+        };
+        let context = context.clone();
+        tools.push(ToolDef {
+            name,
+            description: string(&tool, "description").unwrap_or_default(),
+            parameters,
+            func: Rc::new(move |args, _| {
+                let (context, tool) = (context.clone(), tool.clone());
+                Box::pin(async move {
+                    let error = |e: JsValue| Error::Tool(js_message(&e));
+                    // Cancel drops this future; the guard then aborts the signal the tool sees.
+                    let guard = Abort {
+                        controller: AbortController::new().map_err(error)?,
+                        timer: JsValue::UNDEFINED,
+                    };
+                    let options = js_sys::Object::new();
+                    Reflect::set(&options, &"signal".into(), &guard.controller.signal())
+                        .map_err(error)?;
+                    let execute = function(&context, "executeTool")
+                        .ok_or_else(|| Error::Tool("document.modelContext is gone".into()))?;
+                    let call = |input: JsValue| {
+                        let returned = execute.call3(&context, &tool, &input, &options);
+                        async move { settle(&returned?).await }
+                    };
+                    let mut result = call(to_js(&args)).await;
+                    // shortcut: Chrome 153 takes the input as a JSON string, not an object as the
+                    // spec says. Its UnknownError comes before the tool runs, so one retry cannot run
+                    // it twice; the shim never uses that name. Remove when Chrome follows the spec.
+                    if matches!(&result, Err(e) if prop(e, "name").as_string().as_deref() == Some("UnknownError")
+                        && js_message(e).contains("parse input arguments"))
+                    {
+                        result = call(JsValue::from_str(&args.to_string())).await;
+                    }
+                    let text = result.map_err(error)?.as_string().unwrap_or_default();
+                    // A page tool may return any JSON; anything that is not an MCP result is its text.
+                    let value = match serde_json::from_str::<Value>(&text) {
+                        Ok(v) if v.get("content").is_some() || v.get("structuredContent").is_some() => v,
+                        Ok(Value::String(s)) => json!({"content": [{"type": "text", "text": s}]}),
+                        _ => json!({"content": [{"type": "text", "text": text}]}),
+                    };
+                    gait_core::mcp::result_text(&value).map(ToolOutput::Text)
+                })
+            }),
+        });
+    }
+    tools
+}
+
 struct PageObserver(Option<Function>);
 impl Observer for PageObserver {
     fn emit(&self, event: &Event) {
@@ -302,7 +381,7 @@ async fn build(config: JsValue) -> Result<GaitSession> {
     ] {
         if !prop(&config, key).is_undefined() {
             return Err(Error::Tool(format!(
-                "'{key}' was removed; tools execute through the same-origin MCP server, and the host saves state() and passes it back as 'state'"
+                "'{key}' was removed; server tools execute through the same-origin MCP server, page tools register with document.modelContext.registerTool(), and the host saves state() and passes it back as 'state'"
             )));
         }
     }
@@ -348,6 +427,14 @@ async fn build(config: JsValue) -> Result<GaitSession> {
             .ok_or_else(|| {
                 Error::Llm("contextWindow must be an integer of at least 1024 tokens".into())
             })? as usize;
+    }
+    let turns = prop(&config, "maxModelTurns");
+    if !turns.is_undefined() {
+        agent.max_model_calls = turns
+            .as_f64()
+            .filter(|v| v.fract() == 0.0 && (1.0..=1000.0).contains(v))
+            .ok_or_else(|| Error::Llm("maxModelTurns must be an integer from 1 to 1000".into()))?
+            as usize;
     }
     agent.compaction.reserve_tokens = agent
         .compaction
@@ -413,7 +500,13 @@ impl GaitSession {
             );
             ctx.cancel = cancel;
             ctx.on_delta = inner.on_delta.clone();
-            let value = match inner.agent.run(&prompt, &ctx).await {
+            // A page whose getTools() never settles must not lock the session: Stop ends the wait.
+            let result = async {
+                ctx.page_tools = ctx.cancel.run(page_tools(&ctx.trace)).await?;
+                inner.agent.run(&prompt, &ctx).await
+            }
+            .await;
+            let value = match result {
                 Ok(answer) => {
                     json!({"message": answer.message, "usage": answer.usage, "steps": answer.steps, "stopReason": answer.stop_reason, "cancelled": false, "error": null})
                 }

@@ -10,7 +10,7 @@ use crate::dialog::Message;
 use crate::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -18,8 +18,6 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     /// OpenAI-shaped tool definitions. Adapters convert them when needed.
     pub tools: Vec<Value>,
-    /// Caller parameters. Each adapter keeps only what its API accepts, like `drop_params`.
-    pub params: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

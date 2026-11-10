@@ -297,13 +297,14 @@ fn duplicate_names_including_internal_skill_tools_are_rejected() {
 fn iteration_limit_and_empty_answers_do_not_commit() {
     for answers in [
         vec![says("")],
-        (0..10).map(|_| asks("missing", json!({}))).collect(),
+        (0..3).map(|_| asks("missing", json!({}))).collect(),
     ] {
         let ctx = ctx();
-        let error =
-            block_on(agent(Model::new(answers.clone()), files(catalog()), vec![]).run("go", &ctx))
-                .unwrap_err();
-        let expected = if answers.len() == 10 {
+        let mut agent = agent(Model::new(answers.clone()), files(catalog()), vec![]);
+        assert_eq!(agent.max_model_calls, 50);
+        agent.max_model_calls = 3;
+        let error = block_on(agent.run("go", &ctx)).unwrap_err();
+        let expected = if answers.len() == 3 {
             "max_model_turns"
         } else {
             "error"
@@ -468,4 +469,61 @@ fn a_turn_that_grows_too_long_compacts_earlier_turns_once() {
         .map(|m| m.role.clone())
         .collect();
     assert_eq!(roles, ["system", "user", "assistant"]);
+}
+
+struct Events(RefCell<Vec<String>>);
+impl gait_core::observer::Observer for Events {
+    fn emit(&self, event: &gait_core::observer::Event) {
+        self.0
+            .borrow_mut()
+            .push(format!("{}: {}", event.category, event.message));
+    }
+}
+
+#[test]
+fn page_tools_run_for_one_turn_and_clashing_names_are_skipped() {
+    let calls = Rc::new(RefCell::new(0));
+    let events = Rc::new(Events(RefCell::default()));
+    let mut ctx = Ctx::new(
+        Scratchpad::new(),
+        Dialog::new(),
+        Trace::new(events.clone(), Rc::new(|| 0.0), "t"),
+    );
+    let mut page = counted_tool(calls.clone());
+    page.name = "page_draft".into();
+    let mut clash = counted_tool(calls.clone());
+    clash.name = "write".into();
+    let mut bad = counted_tool(calls.clone());
+    bad.name = "bad name".into();
+    ctx.page_tools = vec![page, clash, bad];
+    let model = Model::new(vec![asks("page_draft", json!({})), says("done")]);
+    let fixed = vec![counted_tool(Rc::new(RefCell::new(0)))];
+    let agent = agent(model.clone(), files(catalog()), fixed);
+    assert_eq!(block_on(agent.run("go", &ctx)).unwrap().message, "done");
+    assert_eq!(*calls.borrow(), 1);
+    let names: Vec<String> = model.requests.borrow()[0]
+        .tools
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names.iter().filter(|n| *n == "write").count(), 1);
+    assert!(names.contains(&"page_draft".to_owned()));
+    assert!(!names.contains(&"bad name".to_owned()));
+    let rejected: Vec<_> = events
+        .0
+        .borrow()
+        .iter()
+        .filter(|e| e.starts_with("tool_rejected"))
+        .cloned()
+        .collect();
+    assert_eq!(rejected.len(), 2, "{rejected:?}");
+
+    // The next turn without page tools no longer offers them.
+    ctx.page_tools.clear();
+    let model = Model::new(vec![says("ok")]);
+    block_on(self::agent(model.clone(), files(catalog()), vec![]).run("again", &ctx)).unwrap();
+    assert!(model.requests.borrow()[0]
+        .tools
+        .iter()
+        .all(|t| t["function"]["name"] != "page_draft"));
 }

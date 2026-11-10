@@ -56,9 +56,9 @@ class ProxyStreaming(unittest.TestCase):
         self.addCleanup(self.proxy.shutdown)
         self.addCleanup(Upstream.release.set)
 
-    def post(self, query=""):
+    def post(self, query="", path=PATH):
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self.proxy.server_address[1]}{PATH}{query}",
+            f"http://127.0.0.1:{self.proxy.server_address[1]}{path}{query}",
             data=b"{}",
             headers={"Origin": ORIGIN, "Content-Type": "application/json"},
         )
@@ -78,6 +78,11 @@ class ProxyStreaming(unittest.TestCase):
         self.assertEqual(caught.exception.code, 429)
         self.assertEqual(caught.exception.read(), b"slow")
         self.assertEqual(caught.exception.headers["Access-Control-Allow-Origin"], ORIGIN)
+
+    def test_only_chat_completions_is_forwarded(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post(path="/openai/deployments/x/embeddings")
+        self.assertEqual(caught.exception.code, 403)
 
 
 if __name__ == "__main__":

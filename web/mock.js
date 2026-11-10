@@ -1,6 +1,7 @@
 // Scripted LLM for the keyless demo. Its answers are canned, not generated.
 const wantsMath = (text) => /multipl|\d\s*[x*×]\s*\d/i.test(text);
 const wantsSkill = (text) => /convert/i.test(text);
+const wantsPage = (text) => /on (the|this) page/i.test(text);
 
 function toolCall(name, args) {
   return {
@@ -36,6 +37,7 @@ export async function mockChat({ messages }) {
     if (last.name === "read_skill_resource") return reply(`[mock] From the skill's file: ${last.content.trim()}`);
     return reply(`[mock] The tool returned ${last.content}.`);
   }
+  if (wantsPage(text)) return toolCall("page_read_messages", {});
   if (wantsSkill(text)) return toolCall("activate_skill", { name: "unit-conversion" });
   if (wantsMath(text)) {
     const [a = 6, b = 7] = (text.match(/\d+/g) ?? []).map(Number);

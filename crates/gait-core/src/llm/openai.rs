@@ -4,23 +4,8 @@ use super::{
 use crate::dialog::{Message, ToolCall, ToolFunction};
 use crate::{Error, Result};
 use async_trait::async_trait;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::rc::Rc;
-
-const ALLOWED_PARAMS: &[&str] = &[
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "stop",
-    "seed",
-    "response_format",
-    "tool_choice",
-    "parallel_tool_calls",
-    "reasoning_effort",
-    "frequency_penalty",
-    "presence_penalty",
-];
 
 /// Builds one response from streamed chunks.
 #[derive(Default)]
@@ -96,7 +81,6 @@ impl StreamedAnswer {
         }
         // A cut connection must not pass for a finished answer.
         if self.finish_reason.is_none() {
-            // A cut connection must not pass for a finished answer.
             return Err(Error::Transport(
                 "the stream ended before the answer was complete".into(),
             ));
@@ -182,36 +166,12 @@ impl OpenAiCompat {
         })
     }
 
-    fn is_reasoning_model(&self) -> bool {
-        // shortcut: name prefixes instead of LiteLLM's model catalog; extend the list as new families appear.
-        ["o1", "o3", "o4", "gpt-5"]
-            .iter()
-            .any(|p| self.model.starts_with(p))
-    }
-
-    fn body(&self, request: ChatRequest) -> Result<Value> {
-        let mut messages = Vec::with_capacity(request.messages.len());
-        for message in &request.messages {
-            let mut value = serde_json::to_value(message)?;
-            if let Some(object) = value.as_object_mut() {
-                object.remove("provider_blocks");
-            }
-            messages.push(value);
-        }
-        let mut body = Map::new();
-        body.insert("model".into(), json!(self.model));
-        body.insert("messages".into(), Value::Array(messages));
+    fn body(&self, request: ChatRequest) -> Value {
+        let mut body = json!({"model": self.model, "messages": request.messages});
         if !request.tools.is_empty() {
-            body.insert("tools".into(), Value::Array(request.tools));
+            body["tools"] = Value::Array(request.tools);
         }
-        let reasoning = self.is_reasoning_model();
-        for (key, value) in request.params {
-            let rejected = reasoning && (key == "temperature" || key == "top_p");
-            if ALLOWED_PARAMS.contains(&key.as_str()) && !rejected {
-                body.insert(key, value);
-            }
-        }
-        Ok(Value::Object(body))
+        body
     }
 }
 
@@ -222,7 +182,7 @@ impl LlmClient for OpenAiCompat {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let body = self.body(request)?.to_string();
+        let body = self.body(request).to_string();
         let response = self
             .http
             .post_json(&self.chat_url, &self.headers, body)
@@ -250,7 +210,7 @@ impl LlmClient for OpenAiCompat {
         request: ChatRequest,
         on_delta: &OnDelta<'_>,
     ) -> Result<ChatResponse> {
-        let mut body = self.body(request)?;
+        let mut body = self.body(request);
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         let mut answer = StreamedAnswer::default();
