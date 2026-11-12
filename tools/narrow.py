@@ -30,8 +30,9 @@ CARD_LEGEND = ("Each column line: name type [unit] [flags] \"alias\": values | n
                "in that case. like or ilike = compare with LIKE or ILIKE '%value%'. exact = never use LIKE. cast:TYPE = CAST(column AS TYPE) "
                "in a comparison. KEY=meaning values: the question uses the meaning, SQL uses KEY. Values are examples, and + means more "
                "exist. relationships: joins between tables; distances are in metres.")
-# Instruction lines that layers-json renders from match, cast and example; the flags already say them.
-RENDERED = ("Make sure to", "ALWAYS use SQL CAST", "NEVER use SQL LIKE", "For example:", "Use '")
+# Instruction lines that layers-json renders from `match`, with the match value each one states.
+MATCH_LINES = (("Make sure to uppercase", "upper"), ("Make sure to lowercase", "lower"), ("Make sure to use the SQL LIKE", "like"),
+               ("Make sure to use the SQL ILIKE", "ilike"), ("NEVER use SQL LIKE", "exact"))
 
 
 def extension(item, vendor):
@@ -39,15 +40,26 @@ def extension(item, vendor):
     return next((json.loads(e["data"]) for e in item.get("custom_extensions") or [] if e["vendor_name"] == vendor), {})
 
 
+def said_by_flags(line, name, ai, codes):
+    """True when a generated instruction line only repeats what the flags, the cast type or the codes say."""
+    match = next((m for prefix, m in MATCH_LINES if line.startswith(prefix)), None)
+    if match:
+        return ai.get("match") == match
+    if line.startswith("ALWAYS use SQL CAST AS "):
+        return bool(ai.get("cast")) and line.startswith(f"ALWAYS use SQL CAST AS {ai['cast']} ")
+    if line.startswith(("For example:", f"Use '{name} ")):  # examples of a rule or a code
+        return bool(ai.get("match") or ai.get("cast") or codes)
+    return False
+
+
 def column_card(f):
     """One line for an Ossie field."""
     ai, geo = f.get("ai_context") or {}, extension(f, "OSSIE_GEO")
     flags = [m for m in [ai.get("match")] if m] + ([f"cast:{ai['cast']}"] if ai.get("cast") else [])
-    description = f.get("description")
-    lines = (ai.get("instructions") or "").splitlines()
-    notes = [description] if description else []
-    notes += [n for n in lines if n and n != description and not n.startswith(RENDERED)]
     values, codes = ai.get("sample_values") or [], geo.get("codes") or []
+    description = f.get("description")
+    notes = [description] if description else []
+    notes += [n for n in (ai.get("instructions") or "").splitlines() if n and n != description and not said_by_flags(n, f["name"], ai, codes)]
     numeric = f["datatype"] in ("Integer", "Float", "Decimal", "Date", "DateTime")
     limit = 2 if numeric else 3 if {"like", "ilike"} & set(flags) else 16
     shown = [f"{c['value']}={c['label']}" for c in codes] or [str(v) for v in values[:limit]]

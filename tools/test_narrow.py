@@ -43,6 +43,7 @@ class Narrow(unittest.TestCase):
                       "custom_extensions": geo({"codes": [{"value": "NO", "label": "Norway"}]})},
                      {"name": "kind", "datatype": "Integer", "ai_context": {"match": "exact", "cast": "SMALLINT", "sample_values": ["0", "1", "2"]},
                       "custom_extensions": arcgis({"dtype": "SmallInteger"})},
+                     {"name": "status", "datatype": "String", "ai_context": {"instructions": "Make sure to exclude decommissioned wells\nMake sure to uppercase the values\nUse 'status' only with phase\nALWAYS use SQL CAST AS INTEGER when comparing"}},
                      {"name": "depth", "datatype": "Float", "ai_context": {"match": "exact", "cast": "DOUBLE PRECISION", "sample_values": ["1", "2", "3"]},
                       "custom_extensions": geo({"unit": "meters"})},
                      {"name": "geometry", "datatype": "Geometry", "dimension": {"spatial": {"type": "point", "multi": False, "srid": 4326}}}]}
@@ -70,6 +71,8 @@ class Narrow(unittest.TestCase):
             'phase String upper "current phase": A, B | Ask which phase if unsure',
             "country String exact: NO=Norway",
             "kind SmallInteger exact cast:SMALLINT: 0, 1 +",
+            # no match, cast or codes: every line is a rule the card must keep
+            "status String | Make sure to exclude decommissioned wells Make sure to uppercase the values Use 'status' only with phase ALWAYS use SQL CAST AS INTEGER when comparing",
             "depth Float meters exact cast:DOUBLE PRECISION: 1, 2 +"])
         self.assertEqual((pipes["geometry"], pipes["columns"], "valid_time" in pipes), ("line 4326", [], False))
         self.assertEqual(out["relationships"], ["near: Wells.geometry within_distance 500 m Pipes.geometry | Use EPSG:3035.",
