@@ -748,7 +748,7 @@ MAP_STATE = """done({
 def map_gateway(page, *also):
     """The real gateway in front of a fake mcp-rwee; yields the gateway's port, then stops it and `also`."""
     upstream = serve(FakeRwee)
-    cfg = {"mode": "narrow", "database": "/db/demo.duckdb", "layers": "/db/Layers.json", "timeout": 10,
+    cfg = {"mode": "narrow", "database": "/db/demo.duckdb", "okf": "/db/knowledge", "timeout": 10,
            "name": "demo", "about": "demo dataset", "skill": "demo-sql"}
     up = gateway.Upstream(f"http://127.0.0.1:{upstream.server_address[1]}", MAP_TOKEN, 10)
     gw = serve(partial(gateway.Handler, directory=str(WEB), upstream=up, cfg=cfg, page=page))

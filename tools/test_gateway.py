@@ -75,7 +75,7 @@ class Gateway(unittest.TestCase):
     def start(self, mode, **site):
         FakeUpstream.calls = []
         self.up = serve(FakeUpstream)
-        self.cfg = cfg = {"mode": mode, "database": "/db/demo.duckdb", "layers": "/db/Layers.json", "timeout": 5, **DATASET}
+        self.cfg = cfg = {"mode": mode, "database": "/db/demo.duckdb", "okf": "/db/knowledge", "timeout": 5, **DATASET}
         upstream = gateway.Upstream(f"http://127.0.0.1:{self.up.server_address[1]}", TOKEN, 5)
         self.gw = serve(partial(gateway.Handler, directory=str(gateway.WEB), upstream=upstream, cfg=cfg, **site))
         for server in (self.up, self.gw):
@@ -156,7 +156,7 @@ class Gateway(unittest.TestCase):
     def test_narrow_layers_passes_the_table(self):
         self.start("narrow")
         self.call("demo_layers", {"table": "Wells"})
-        self.assertEqual(FakeUpstream.calls[1][1]["args"], ["layers", "/db/Layers.json", "Wells"])
+        self.assertEqual(FakeUpstream.calls[1][1]["args"], ["layers", "/db/knowledge", "Wells"])
 
     def test_narrow_rejects_other_tools_and_bad_arguments_without_calling_upstream(self):
         self.start("narrow")
@@ -240,7 +240,7 @@ class Gateway(unittest.TestCase):
             return gateway.load(f.name)
 
         self.addCleanup(os.environ.pop, "MCP_RWEE_TOKEN", None)
-        base = {"url": "http://127.0.0.1:1", "database": "d", "layers": "l", **DATASET}
+        base = {"url": "http://127.0.0.1:1", "database": "d", "okf": "k", **DATASET}
         self.assertEqual(load(base)[1]["mode"], "narrow")  # narrow is the default
         self.assertEqual(load({"url": base["url"], "mode": "passthrough"})[1]["mode"], "passthrough")  # no dataset needed
         with TemporaryDirectory() as kb:
@@ -250,7 +250,8 @@ class Gateway(unittest.TestCase):
             load(base, kb="/no/such/kb")
         for bad in ({**base, "mode": "wide"}, {"url": base["url"]}, {**base, "url": "http://example.com"},
                     *({**base, key: ""} for key in DATASET), {**base, "name": "Demo-1"},
-                    {**base, "url": "http://127.0.0.1.example.com"}, {**base, "url": "http://127.0.0.1@example.com"}):
+                    {**base, "url": "http://127.0.0.1.example.com"}, {**base, "url": "http://127.0.0.1@example.com"},
+                    {**{k: v for k, v in base.items() if k != "okf"}, "layers": "/db/Layers.json"}):  # the old key is gone
             with self.assertRaises(SystemExit):
                 load(bad)
         with self.assertRaises(SystemExit):

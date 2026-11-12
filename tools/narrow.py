@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Script that tools/gateway.py runs on the mcp-rwee server (needs duckdb).
 
-  narrow.py layers LAYERS_JSON [TABLE]   table list, or the metadata of one table
+  narrow.py layers OKF_DIR [TABLE]       cards of every table from the bundle's Ossie model, or one table's page
   narrow.py query DATABASE QUERIES_JSON [geojson|parquet]
                                            read-only SELECTs, a JSON list of {"name", "sql"}; prints JSON, and for each
                                            GEOMETRY result writes one file, NAME.geojson (default) or NAME.parquet
@@ -26,49 +26,88 @@ MAX_QUERIES = 6
 MAX_ROWS = 100_000
 
 
-CARD_LEGEND = ("Each column line: name type [unit] [flags] \"alias\": values | notes. Flags: upper = compare with the value in uppercase. "
-               "like = compare with LIKE '%value%'. cast = CAST(column AS DOUBLE PRECISION) in a comparison. exact = never use LIKE. "
-               "KEY=meaning values: the question uses the meaning, SQL uses KEY. Values are examples, and + means more exist.")
-RULE_HINTS = (("Make sure to uppercase", "upper"), ("Make sure to use the SQL LIKE", "like"),
-              ("ALWAYS use SQL CAST AS DOUBLE", "cast"), ("NEVER use SQL LIKE", "exact"))
+CARD_LEGEND = ("Each column line: name type [unit] [flags] \"alias\": values | notes. Flags: upper or lower = compare with the value "
+               "in that case. like or ilike = compare with LIKE or ILIKE '%value%'. exact = never use LIKE. cast:TYPE = CAST(column AS TYPE) "
+               "in a comparison. KEY=meaning values: the question uses the meaning, SQL uses KEY. Values are examples, and + means more "
+               "exist. relationships: joins between tables; distances are in metres.")
+# Instruction lines that layers-json renders from match, cast and example; the flags already say them.
+RENDERED = ("Make sure to", "ALWAYS use SQL CAST", "NEVER use SQL LIKE", "For example:", "Use '")
 
 
-def column_card(c):
-    """One line for a column. A hint that a flag or a key already says is dropped; any other hint is kept word for word."""
-    flags, notes = [], []
-    for hint in c.get("hints") or []:
-        flag = next((f for prefix, f in RULE_HINTS if hint.startswith(prefix)), None)
-        if flag:
-            flags.append(flag)
-        elif not hint.startswith(("For example:", "Use '")):
-            notes.append(hint)
-    values = c.get("values") or []
-    keyval = c.get("keyval") or {}
-    numeric = c.get("dtype") in ("Double", "Integer", "SmallInteger", "Date")
-    limit = 2 if numeric else 16 if "like" not in flags else 3
-    shown = [f"{k}={v}" for k, v in keyval.items()] or [str(v) for v in values[:limit]]
-    text = " ".join(filter(None, [c["name"], c.get("dtype"), c.get("utype"), *flags]))
-    alias = c.get("alias")
-    if alias and alias != c["name"].replace("_", " "):
+def extension(item, vendor):
+    """The data of one custom extension (ARCGIS or OSSIE_GEO) of an Ossie item, as a dict."""
+    return next((json.loads(e["data"]) for e in item.get("custom_extensions") or [] if e["vendor_name"] == vendor), {})
+
+
+def column_card(f):
+    """One line for an Ossie field."""
+    ai, geo = f.get("ai_context") or {}, extension(f, "OSSIE_GEO")
+    flags = [m for m in [ai.get("match")] if m] + ([f"cast:{ai['cast']}"] if ai.get("cast") else [])
+    description = f.get("description")
+    lines = (ai.get("instructions") or "").splitlines()
+    notes = [description] if description else []
+    notes += [n for n in lines if n and n != description and not n.startswith(RENDERED)]
+    values, codes = ai.get("sample_values") or [], geo.get("codes") or []
+    numeric = f["datatype"] in ("Integer", "Float", "Decimal", "Date", "DateTime")
+    limit = 2 if numeric else 3 if {"like", "ilike"} & set(flags) else 16
+    shown = [f"{c['value']}={c['label']}" for c in codes] or [str(v) for v in values[:limit]]
+    dtype = extension(f, "ARCGIS").get("dtype") or f["datatype"]
+    text = " ".join(filter(None, [f["name"], dtype, geo.get("unit"), *flags]))
+    alias = next(iter(ai.get("synonyms") or []), None)
+    if alias and alias != f["name"].replace("_", " "):
         text += f' "{alias}"'
     if shown:
-        text += ": " + ", ".join(shown) + (" +" if not keyval and len(values) > limit else "")
+        text += ": " + ", ".join(shown) + (" +" if not codes and len(values) > limit else "")
     return text + (" | " + " ".join(notes) if notes else "")
 
 
-def card(x):
-    return {"table_name": x["table_name"], "stype": x.get("stype"), "display": x.get("display"),
-            "about": " ".join(x.get("hints") or []), "columns": [column_card(c) for c in x["columns"]]}
+def card(d):
+    """The card of an Ossie dataset. Fields that layers-json left out of its view, and the geometry, are not columns."""
+    geometry = next((f for f in d["fields"] if f["datatype"] == "Geometry"), None)
+    spatial = (geometry or {}).get("dimension", {}).get("spatial", {})
+    about = " ".join(dict.fromkeys(filter(None, [d.get("description"), (d.get("ai_context") or {}).get("instructions")])))
+    out = {"table_name": d["name"], "about": about, "geometry": f"{spatial.get('type')} {spatial.get('srid')}" if spatial else None,
+           "display": extension(d, "ARCGIS").get("display_field"), "key": d.get("primary_key"), "rows": extension(d, "OSSIE_GEO").get("row_count")}
+    if d.get("valid_time"):
+        out["valid_time"] = d["valid_time"]
+    out["columns"] = [column_card(f) for f in d["fields"] if f is not geometry and extension(f, "ARCGIS").get("view") is not False]
+    return out
 
 
-def layers(path, table=None):
-    found = json.loads(Path(path).read_text(encoding="utf-8"))["layers"]
+def relationship(r):
+    """One line for an Ossie relationship: equal key columns, or a spatial and/or temporal predicate."""
+    a, b = r["from"], r["to"]
+    if "from_columns" in r:
+        joins = [f"{a}({', '.join(r['from_columns'])}) = {b}({', '.join(r.get('to_columns', []))})"]
+    else:
+        sp, tm = r.get("spatial"), r.get("temporal")
+        joins = []
+        if sp:
+            distance = f" {sp['distance']} m" if "distance" in sp else ""
+            joins.append(f"{a}.{sp['from_field']} {sp.get('predicate', 'any spatial predicate')}{distance} {b}.{sp['to_field']}")
+        if tm:
+            duration = f" {tm['duration']} s" if "duration" in tm else ""
+            joins.append(f"{a} valid time {tm.get('predicate', 'any temporal predicate')}{duration} {b} valid time")
+    note = (r.get("ai_context") or {}).get("instructions")
+    return f"{r['name']}: {' and '.join(joins)}" + (f" | {note}" if note else "")
+
+
+def layers(okf, table=None):
+    """The OKF bundle in folder okf: with no table, cards from its Ossie model; with a table, its Markdown page."""
+    models = sorted(Path(okf).glob("*.ossie.json"))
+    if len(models) != 1:
+        raise SystemExit(f"the OKF folder needs exactly one *.ossie.json, found {len(models)}")
+    model = json.loads(models[0].read_text(encoding="utf-8"))
     if table is None:
-        return {"legend": CARD_LEGEND, "tables": [card(x) for x in found]}
-    for x in found:
-        if x["table_name"].lower() == table.lower():
-            return x
-    raise SystemExit(f"unknown table {table}; call without a table to list them")
+        out = {"legend": CARD_LEGEND, "tables": [card(d) for d in model["datasets"]]}
+        if model.get("relationships"):
+            out["relationships"] = [relationship(r) for r in model["relationships"]]
+        return out
+    # The page path uses the model's own name, never the caller's text.
+    name = next((d["name"] for d in model["datasets"] if d["name"].lower() == table.lower()), None)
+    if name is None:
+        raise SystemExit(f"unknown table {table}; call without a table to list them")
+    return (Path(okf) / "datasets" / f"{name}.md").read_text(encoding="utf-8")
 
 
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -171,4 +210,4 @@ if __name__ == "__main__":
         sys.exit(f"usage error: {error!r}")
     except Exception as error:  # noqa: BLE001 - DuckDB errors go back to the model as text
         sys.exit(f"{type(error).__name__}: {error}")
-    print(json.dumps(result, default=str, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow
+    print(result if isinstance(result, str) else json.dumps(result, default=str, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow
