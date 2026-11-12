@@ -1177,7 +1177,7 @@ Server routes:
   <div class="table-wrap"><table>
     <caption>Tools in narrow mode</caption>
     <thead><tr><th scope="col">Tool</th><th scope="col">Arguments</th><th scope="col">Result</th></tr></thead><tbody>
-      <tr><td><code>NAME_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table (section 18.1). With a table: the full metadata of that table.</td></tr>
+      <tr><td><code>NAME_layers</code></td><td>Optional <code>table</code> (string).</td><td>With no table: one compact card for each table, and the joins between tables (section 18.1). With a table: the page of that table from the OKF bundle, <code>datasets/TABLE.md</code>, unchanged.</td></tr>
       <tr><td><code>NAME_query</code></td><td>Either <code>sql</code>, or <code>queries</code> with 1 to 6 items. Each item has a <code>name</code> and a <code>sql</code>. A name matches <code>^[a-z][a-z0-9_]{0,31}$</code>. Names are unique. Each SQL string has 1 to 20,000 characters.</td><td>A JSON object with one entry in <code>layers</code> for each query. A single <code>sql</code> gets the name <code>result</code>. After the JSON, a <code>files:</code> list gives the URL of each map file.</td></tr>
     </tbody>
   </table></div>
@@ -1244,9 +1244,9 @@ Server routes:
     <li>Make one configuration file for each dataset, for example <code>gateway.json</code>. Do not put the token in it.<pre><code>{"port": 8080, "kb": "kb",
  "map": {"title": "Roads map", "intro": "...", "placeholder": "...", "center": [-97.7, 30.3], "zoom": 10},
  "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN", "mode": "narrow",
-  "database": "/path/roads.duckdb", "layers": "/path/Layers.json", "timeout": 120,
+  "database": "/path/roads.duckdb", "okf": "/path/knowledge", "timeout": 120,
   "name": "roads", "about": "road network", "skill": "roads-sql"}}</code></pre>
-    <p>In narrow mode, <code>name</code>, <code>about</code> and <code>skill</code> are necessary. They set the tool names and the tool descriptions. <code>database</code> and <code>layers</code> are paths on the upstream machine. <code>kb</code> is optional. It is a folder from <code>tools/export_kb.py</code>, relative to the configuration file. The gateway serves it at <code>/kb/</code>. <code>map</code> is optional. The gateway serves it as <code>/map.json</code>. The map page reads its title, intro, placeholder, center and zoom from it.</p></li>
+    <p>In narrow mode, <code>name</code>, <code>about</code> and <code>skill</code> are necessary. They set the tool names and the tool descriptions. <code>database</code> and <code>okf</code> are paths on the upstream machine. <code>okf</code> is the OKF bundle folder of the dataset: it has one <code>NAME.ossie.json</code> model and one <code>datasets/TABLE.md</code> page for each table. layers-json writes this bundle. <code>kb</code> is optional. It is a folder from <code>tools/export_kb.py</code>, relative to the configuration file. The gateway serves it at <code>/kb/</code>. <code>map</code> is optional. The gateway serves it as <code>/map.json</code>. The map page reads its title, intro, placeholder, center and zoom from it.</p></li>
     <li>Start the gateway.<pre><code>MCP_RWEE_TOKEN=... python3 tools/gateway.py gateway.json</code></pre></li>
     <li>Start the model proxy in a second terminal.<pre><code>AZURE_API_BASE=... AZURE_API_KEY=... python3 tools/dev_proxy.py</code></pre></li>
     <li>Open <a href="http://localhost:8080/map.html">http://localhost:8080/map.html</a>. Use <code>localhost</code>, because the proxy accepts only that origin.</li>
@@ -1362,16 +1362,20 @@ Server routes:
   <h2>18. Reduce the token cost</h2>
   <p>Each model call sends the full conversation of the turn again. Thus, a large tool result costs tokens at each later call in that turn. The <code>narrow</code> tools keep their results small.</p>
   <h3>18.1 Table cards</h3>
-  <p><code>NAME_layers</code> with no table gives a legend and one card for each table. A card has the table name, the geometry type, the display column, a short description and one line for each column.</p>
+  <p><code>NAME_layers</code> with no table reads the Apache Ossie model in the OKF bundle (<code>NAME.ossie.json</code>). It gives a legend, one card for each table, and one line for each relationship. The model must be the only <code>*.ossie.json</code> file in the folder.</p>
+  <p>A card has the table name, a short description, the geometry type and its SRID, the display column, the primary key, the row count, the valid time (if the table has one), and one line for each column. The geometry column and the columns that layers-json keeps out of its view (<code>ARCGIS</code> <code>view: false</code>) are not column lines.</p>
   <p>An example column line:</p>
-  <pre><code>water_depth Double m cast "Water depth": 104.5, 350.0 +</code></pre>
+  <pre><code>water_depth Float meters exact cast:DOUBLE PRECISION "well water depth": 110.0, 92.964 + | Depth of the well in meters</code></pre>
   <ul>
-    <li>A column line has the name, the type, the unit, flags, the alias and example values.</li>
-    <li>A known rule hint becomes a short flag: <code>upper</code> (compare with the value in uppercase), <code>like</code> (compare with <code>LIKE '%value%'</code>), <code>cast</code> (cast to <code>DOUBLE PRECISION</code> in a comparison), <code>exact</code> (never use <code>LIKE</code>).</li>
-    <li>A hint that the script does not recognize stays word for word.</li>
-    <li>Coded values show as <code>KEY=meaning</code>. The question uses the meaning, and the SQL uses the key.</li>
-    <li>Numeric and date columns (<code>Double</code>, <code>Integer</code>, <code>SmallInteger</code>, <code>Date</code>) show 2 example values. <code>like</code> columns show 3. Other columns show up to 16. A <code>+</code> means that more values exist.</li>
+    <li>A column line has the name, the type, the unit, flags, the alias, example values and notes. The type is the <code>ARCGIS</code> <code>dtype</code> (for example <code>SmallInteger</code>) when the model has one.</li>
+    <li>The flags come from the fields <code>match</code> and <code>cast</code> of the model: <code>upper</code> or <code>lower</code> (compare with the value in that case), <code>like</code> or <code>ilike</code> (compare with <code>LIKE</code> or <code>ILIKE '%value%'</code>), <code>exact</code> (never use <code>LIKE</code>), <code>cast:TYPE</code> (cast to that SQL type in a comparison).</li>
+    <li>The notes are the field description and each instruction line that a flag or an example does not already give.</li>
+    <li>Coded values (<code>OSSIE_GEO</code> <code>codes</code>) show as <code>KEY=meaning</code>. The question uses the meaning, and the SQL uses the key.</li>
+    <li>Numeric and date columns show 2 example values. <code>like</code> and <code>ilike</code> columns show 3. Other columns show up to 16. A <code>+</code> means that more values exist.</li>
   </ul>
+  <p>A relationship line gives the join: equal key columns, a spatial predicate with its distance in metres, or a temporal predicate on the valid times. Example: <code>wells_near_pipelines: Wells.geometry within_distance 500 m Pipelines.geometry | Distance is in metres; evaluate it in a projected CRS (NorthSea uses EPSG:3035).</code></p>
+  <p>With a table name, the tool finds the table in the model (case is ignored) and gives its page, <code>datasets/TABLE.md</code>, unchanged. The page path uses the name from the model, not the text from the model call.</p>
+  <p>On 12 November 2026, the cards from the OKF bundles were compared with the cards from <code>Layers.json</code> for three projects. The column lines are the same columns, and no note is lost: rules for case, <code>LIKE</code> and casts are now flags, and every other instruction line stays. An instruction line is removed only when a flag, the cast type or the codes give the same rule. NorthSea went from 10,765 to 8,159 characters, PACI from 36,487 to 26,961, and CISCO2 from 154,957 to 162,626.</p>
   <h3>18.2 Query output</h3>
   <p>The map draws a result with geometry from its file. Thus, the model needs only the shape of that result: <code>row_count</code>, <code>stats</code> and 10 sample rows. A result without geometry gives the rows, up to 200. The skill tells the model to write in its answer every value that the question asks for, because the user does not see tool results.</p>
   <h3>18.3 Measured result</h3>
@@ -1692,7 +1696,7 @@ Server routes:
       <tr><td><a href="../tools/demo_server.py"><code>tools/demo_server.py</code></a></td><td>The local static server and sample MCP multiply tool.</td></tr>
       <tr><td><a href="../tools/dev_proxy.py"><code>tools/dev_proxy.py</code></a></td><td>The local Azure development proxy.</td></tr>
       <tr><td><a href="../tools/gateway.py"><code>tools/gateway.py</code></a></td><td>The same-origin gateway to <code>mcp-rwee</code>: modes, Host and Origin checks, argument checks, the format header and streamed map files.</td></tr>
-      <tr><td><a href="../tools/narrow.py"><code>tools/narrow.py</code></a></td><td>The fixed script that runs on the upstream: table cards, locked-down DuckDB, the query result and one map file in the chosen format.</td></tr>
+      <tr><td><a href="../tools/narrow.py"><code>tools/narrow.py</code></a></td><td>The fixed script that runs on the upstream: table cards and pages from the OKF bundle, locked-down DuckDB, the query result and one map file in the chosen format.</td></tr>
       <tr><td><a href="../web/map.html"><code>web/map.html</code></a> and <a href="../web/map.js"><code>web/map.js</code></a></td><td>The map page, its trace panel, its Content Security Policy and the nine <code>map_*</code> page tools.</td></tr>
       <tr><td><a href="../openshell/Dockerfile"><code>openshell/Dockerfile</code></a></td><td>The image for the optional OpenShell sandbox.</td></tr>
       <tr><td><a href="../tools/e2e.py"><code>tools/e2e.py</code></a></td><td>Browser fixtures and end-to-end checks, including the map test with a fake <code>mcp-rwee</code> and a fake model.</td></tr>

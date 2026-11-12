@@ -22,16 +22,76 @@ def one(db, sql):
 
 @unittest.skipIf(duckdb is None, "duckdb is not installed")
 class Narrow(unittest.TestCase):
-    def test_table_cards_keep_rules_and_any_unknown_hint(self):
-        line = narrow.column_card({"name": "phase", "alias": "current phase", "dtype": "String", "utype": None, "keyval": {}, "values": ["A", "B"],
-                                     "hints": ["The phase", "Make sure to uppercase the values", "For example: given a becomes A"]})
-        self.assertEqual(line, 'phase String upper "current phase": A, B | The phase')
-        self.assertEqual(narrow.column_card({"name": "country", "dtype": "String", "keyval": {"NO": "Norway"}, "values": ["NO"],
-                                               "hints": ["Use 'country = 'NO'' for 'norway'.", "NEVER use SQL LIKE in the WHERE"]}), "country String exact: NO=Norway")
-        self.assertEqual(narrow.column_card({"name": "depth", "dtype": "Double", "utype": "meters", "values": ["1", "2", "3"],
-                                               "hints": ["ALWAYS use SQL CAST AS DOUBLE PRECISION", "Use 'depth = cast(1 as DOUBLE PRECISION)' for 'x'."]}), "depth Double meters cast: 1, 2 +")
-        self.assertEqual(narrow.column_card({"name": "n", "dtype": "String", "values": [str(i) for i in range(20)], "hints": ["Make sure to use the SQL LIKE here"]}), "n String like: 0, 1, 2 +")
+    def bundle(self, *extra_models):
+        """A small OKF bundle: an Ossie model with two datasets and one relationship, and one dataset page."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        okf = Path(tmp.name)
+        geo = lambda data: [{"vendor_name": "OSSIE_GEO", "data": json.dumps(data)}]
+        arcgis = lambda data: [{"vendor_name": "ARCGIS", "data": json.dumps(data)}]
+        wells = {"name": "Wells", "description": "Oil and gas wells.", "primary_key": ["OBJECTID"],
+                 "valid_time": {"start": "entry_date", "end": "completion_date"},
+                 "custom_extensions": arcgis({"display_field": "well_name"}) + geo({"row_count": 2}),
+                 "fields": [
+                     {"name": "OBJECTID", "datatype": "Integer", "custom_extensions": arcgis({"view": False})},
+                     {"name": "well_name", "description": "The name of the well", "datatype": "String",
+                      "ai_context": {"synonyms": ["well name"], "match": "ilike", "sample_values": ["a", "b", "c", "d"],
+                                     "instructions": "The name of the well\nMake sure to use the SQL ILIKE in the WHERE clause.\nFor example: x"}},
+                     {"name": "phase", "datatype": "String", "ai_context": {"synonyms": ["current phase"], "match": "upper", "sample_values": ["A", "B"],
+                                                                            "instructions": "Make sure to uppercase the values\nAsk which phase if unsure"}},
+                     {"name": "country", "datatype": "String", "ai_context": {"match": "exact", "instructions": "Use 'country = 'NO'' for 'norway'."},
+                      "custom_extensions": geo({"codes": [{"value": "NO", "label": "Norway"}]})},
+                     {"name": "kind", "datatype": "Integer", "ai_context": {"match": "exact", "cast": "SMALLINT", "sample_values": ["0", "1", "2"]},
+                      "custom_extensions": arcgis({"dtype": "SmallInteger"})},
+                     {"name": "status", "datatype": "String", "ai_context": {"instructions": "Make sure to exclude decommissioned wells\nMake sure to uppercase the values\nUse 'status' only with phase\nALWAYS use SQL CAST AS INTEGER when comparing"}},
+                     {"name": "depth", "datatype": "Float", "ai_context": {"match": "exact", "cast": "DOUBLE PRECISION", "sample_values": ["1", "2", "3"]},
+                      "custom_extensions": geo({"unit": "meters"})},
+                     {"name": "geometry", "datatype": "Geometry", "dimension": {"spatial": {"type": "point", "multi": False, "srid": 4326}}}]}
+        pipes = {"name": "Pipes", "fields": [{"name": "geometry", "datatype": "Geometry", "dimension": {"spatial": {"type": "line", "srid": 4326}}}]}
+        model = {"version": "0.2", "name": "Demo", "datasets": [wells, pipes], "relationships": [
+            {"name": "near", "from": "Wells", "to": "Pipes", "spatial": {"from_field": "geometry", "to_field": "geometry", "predicate": "within_distance", "distance": 500},
+             "ai_context": {"instructions": "Use EPSG:3035."}},
+            {"name": "same_time", "from": "Wells", "to": "Wells", "temporal": {"predicate": "during"}},
+            {"name": "by_key", "from": "Pipes", "to": "Wells", "from_columns": ["well_id"], "to_columns": ["OBJECTID"]}]}
+        for name in ("Demo", *extra_models):
+            (okf / f"{name}.ossie.json").write_text(json.dumps(model))
+        (okf / "datasets").mkdir()
+        (okf / "datasets" / "Wells.md").write_text("---\ntype: \"Ossie Dataset\"\n---\n\n# Schema\n| `well_name` |\n")
+        (okf / "Wells.md").write_text("outside datasets/")
+        return okf
 
+    def test_cards_come_from_the_ossie_model(self):
+        out = narrow.layers(self.bundle())
+        assert isinstance(out, dict)  # a table name would give the page text instead
+        wells, pipes = out["tables"]
+        self.assertEqual({k: v for k, v in wells.items() if k != "columns"}, {"table_name": "Wells", "about": "Oil and gas wells.", "geometry": "point 4326",
+                         "display": "well_name", "key": ["OBJECTID"], "rows": 2, "valid_time": {"start": "entry_date", "end": "completion_date"}})
+        self.assertEqual(wells["columns"], [  # OBJECTID is out of the view, and the geometry is in the table line
+            "well_name String ilike: a, b, c + | The name of the well",
+            'phase String upper "current phase": A, B | Ask which phase if unsure',
+            "country String exact: NO=Norway",
+            "kind SmallInteger exact cast:SMALLINT: 0, 1 +",
+            # no match, cast or codes: every line is a rule the card must keep
+            "status String | Make sure to exclude decommissioned wells Make sure to uppercase the values Use 'status' only with phase ALWAYS use SQL CAST AS INTEGER when comparing",
+            "depth Float meters exact cast:DOUBLE PRECISION: 1, 2 +"])
+        self.assertEqual((pipes["geometry"], pipes["columns"], "valid_time" in pipes), ("line 4326", [], False))
+        self.assertEqual(out["relationships"], ["near: Wells.geometry within_distance 500 m Pipes.geometry | Use EPSG:3035.",
+                                                "same_time: Wells valid time during Wells valid time",
+                                                "by_key: Pipes(well_id) = Wells(OBJECTID)"])
+        self.assertIn("cast:TYPE", out["legend"])
+
+    def test_a_table_gives_its_page_by_the_model_name(self):
+        okf = self.bundle()
+        self.assertEqual(narrow.layers(okf, "wells"), (okf / "datasets" / "Wells.md").read_text())
+        for name in ("../Wells", "datasets/Wells", "Nope"):
+            with self.assertRaises(SystemExit):
+                narrow.layers(okf, name)
+
+    def test_the_folder_needs_exactly_one_model(self):
+        with self.assertRaises(SystemExit):
+            narrow.layers(self.bundle("Second"))
+        with tempfile.TemporaryDirectory() as empty, self.assertRaises(SystemExit):
+            narrow.layers(empty)
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

@@ -14,9 +14,9 @@ Config (JSON), the token comes from the environment, never from the file. One fi
   {"port": 8080, "kb": "/local/exported/kb",
    "map": {"title": "Roads map", "intro": "...", "placeholder": "...", "center": [-97.7, 30.3], "zoom": 10},
    "mcp": {"url": "http://127.0.0.1:8765", "tokenEnv": "MCP_RWEE_TOKEN", "mode": "narrow",
-           "database": "/path/roads.duckdb", "layers": "/path/Layers.json", "timeout": 120,
+           "database": "/path/roads.duckdb", "okf": "/path/knowledge", "timeout": 120,
            "name": "roads", "about": "road network", "skill": "roads-sql"}}
-database and layers are paths on the upstream host. kb (an export_kb.py folder, served at /kb/) and
+database and okf are paths on the upstream host; okf is an OKF bundle folder (one NAME.ossie.json, datasets/TABLE.md). kb (an export_kb.py folder, served at /kb/) and
 map (served as /map.json for the map page) are optional; a relative kb is relative to the config file; without them the page uses web/kb and its defaults.
 """
 import argparse
@@ -48,7 +48,7 @@ def narrow_tools(cfg):
     """The two narrow tools. Their names and text come from the config, so one gateway serves any DuckDB dataset."""
     name, about, skill = cfg["name"], cfg["about"], cfg["skill"]
     return [
-        {"name": f"{name}_layers", "description": f"With no table: a compact card for every {about} table (geometry type, display column, and each column with its type, unit, rules and example values). With a table: its full metadata. Read the cards once before you write SQL. Rules: skill {skill}.",
+        {"name": f"{name}_layers", "description": f"With no table: a compact card for every {about} table (geometry type and SRID, key, row count, valid time, and each column with its type, unit, rules and example values), and the joins between tables. With a table: its full catalog page. Read the cards once before you write SQL. Rules: skill {skill}.",
          "inputSchema": {"type": "object", "properties": {"table": {"type": "string", "description": "Table name. Leave out to list all tables."}}, "additionalProperties": False}},
         {"name": f"{name}_query", "description": f"Run read-only DuckDB SELECTs on the {about} tables (spatial extension loaded, WGS84 degrees, axis order x=longitude). Give one `sql`, or `queries` for several named layers on one map. A result with no GEOMETRY column returns up to 200 rows (50 per query with `queries`). A result with a GEOMETRY column returns row_count, stats and 10 sample rows, and its full data is one file at the returned url, GeoJSON or GeoParquet as the map page asks, which the map draws. Rules: skill {skill}.",
          "inputSchema": {"type": "object", "properties": {
@@ -130,7 +130,7 @@ def narrow_call(up, cfg, name, args, fmt="geojson"):
     if name == f"{cfg['name']}_layers":
         if set(args) - {"table"} or not isinstance(args.get("table", ""), str):
             raise ValueError("only an optional string table is allowed")
-        script_args = ["layers", cfg["layers"], *([args["table"]] if args.get("table") else [])]
+        script_args = ["layers", cfg["okf"], *([args["table"]] if args.get("table") else [])]
     else:
         queries = [{"name": "result", "sql": args["sql"]}] if set(args) == {"sql"} else args.get("queries") if set(args) == {"queries"} else None
         if not isinstance(queries, list) or not 1 <= len(queries) <= MAX_QUERIES:
@@ -282,7 +282,7 @@ def load(path):
     if mcp["mode"] not in ("narrow", "passthrough"):
         raise SystemExit(f"mode must be narrow or passthrough, not {mcp['mode']!r}")
     if mcp["mode"] == "narrow":
-        if missing := [k for k in ("database", "layers", "name", "about", "skill") if not mcp.get(k)]:
+        if missing := [k for k in ("database", "okf", "name", "about", "skill") if not mcp.get(k)]:
             raise SystemExit(f"narrow mode needs {', '.join(missing)}")
         if not NAME.match(mcp["name"]):
             raise SystemExit("name must be lowercase letters, digits and underscores, for example roads")
