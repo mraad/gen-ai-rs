@@ -160,7 +160,7 @@ metadata:
 2. `activate_skill` fetches that skill's plain instructions and includes them in the next model request.
 3. `read_skill_resource` fetches one listed resource of an active skill.
 
-Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys, and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
+Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys and use 1 to 128 ASCII letters, numbers, dots, underscores, or hyphens (the tool-name rule), and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
 
 Activations survive later turns and session replay. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
 
@@ -196,7 +196,7 @@ python3 tools/measure.py
 
 `tools/e2e.py` also opens `map.html` through the real gateway, with a fake mcp-rwee and a fake model. It needs the network for the ArcGIS SDK and basemap, and checks that each format switch value writes and draws only that format, and that a `color` column gets a color ramp (local test data in `fixtures/map`, written by `tools/narrow.py` and kept out of git; without it the map checks print `SKIP`). Browser checks require a fresh release build and exported fixtures. WASM-only tests: run `wasm-pack test --chrome crates/gait-wasm`, then `python3 tools/e2e.py --wasm-tests http://127.0.0.1:8000/`.
 
-## Design sources reviewed, 2026-11-07
+## Design sources reviewed, 2026-11-12
 
 - [MCP 2026-07-28 transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http): per-request metadata, cancellation by closing the response stream, no protocol sessions.
 - [Anthropic: effective context engineering](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents): small tool surfaces and loading information when it is needed. Applied here as a catalog followed by lazy skill bodies/resources.
@@ -204,6 +204,7 @@ python3 tools/measure.py
 - [agent-in-a-browser](https://github.com/tjfontaine/agent-in-a-browser): a concrete Rust/WASM/MCP browser implementation. Its embedded code-execution runtime is broader than this harness needs; none was added here.
 - [Harness Engineering: a source-code study of eleven systems](https://arxiv.org/abs/2609.00006): reports plain async loops in the studied harnesses. Applied here as a direct loop with no orchestration framework.
 - [CTXAgent, October 2026](https://arxiv.org/abs/2610.34425): studies model-controlled context management and reports model-dependent results. Choice here: retain a deterministic budget and compaction, without adding model-specific context tools.
+- [Context Engineering 2.0](https://arxiv.org/abs/2510.26493) and [Dive into Claude Code](https://arxiv.org/abs/2604.14228): a stable prompt prefix keeps the provider's prompt cache. Here the system prompt and tool schemas are deterministic and page tools come last. A skill activation changes the system prompt once; the skill body stays there, not in a tool result, because tool results are untrusted.
 
 These are implementation choices informed by those sources, not a claim that browser/WASM is the fastest execution location. Measure the built artifact with `tools/measure.py`; it fails when `gait_wasm_bg.wasm` exceeds its 350,000-byte budget, so raise the budget only on purpose, with the reason.
 
@@ -218,6 +219,8 @@ These are implementation choices informed by those sources, not a claim that bro
 | WASM bytes, gzip | 171,207 | 118,255 |
 
 Current glue adds 6,128 bytes gzip. WASM initialization measured 3.9 ms cold and 1.8 ms warm median. A warm local MCP tool round trip measured 0.70 ms median over 20 calls. These exclude model latency and real-network cost. Source counts include the core, adapters, browser binding, and small inline tests; separate test files are excluded. Source and bundle changes intentionally remove APIs; the smaller artifact is not a performance comparison with equivalent feature sets.
+
+2026-11-12, after page tools and a review pass with one behavior change (a skill name over 128 characters is now rejected): 274,099 bytes raw, 119,685 gzip, glue 6,258 gzip. Measured and not applied: `strip = true` (274,465), no SIMD (276,386), no panic hook (272,223, but panics lose their console message).
 
 ## License
 

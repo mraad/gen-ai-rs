@@ -29,11 +29,8 @@ impl Kb {
             serde_json::from_slice(&fetch(http, &format!("{base_url}/kb.json")).await?)?;
         for (name, skill) in &kb.skills {
             if name != &skill.name
-                || name.is_empty()
+                || !crate::mcp::valid_name(name)
                 || name.contains("..")
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
                 || skill.description.trim().is_empty()
                 || skill.hash.is_empty()
                 || skill.resources.iter().any(|p| {

@@ -1,5 +1,5 @@
 //! One Streamable HTTP MCP endpoint, revision 2026-07-28. No retries or protocol sessions.
-use crate::agent::{ToolDef, ToolOutput};
+use crate::agent::ToolDef;
 use crate::llm::{parse_json, Http, SseParser};
 use crate::observer::Trace;
 use crate::{Error, Result};
@@ -165,7 +165,7 @@ pub async fn tools(url: String, http: Rc<dyn Http>, trace: &Trace) -> Result<Vec
                         let result = remote
                             .request("tools/call", json!({"name": name, "arguments": args}))
                             .await?;
-                        result_text(&result).map(ToolOutput::Text)
+                        result_text(&result)
                     })
                 }),
             });
