@@ -1537,7 +1537,7 @@ e2e.main()</code></pre></li>
   <p>On 8 November 2026, after the minimal pass, the results were: 25 native Rust tests, 16 gateway tests, 7 upstream-script tests, 70 browser checks, and a WASM file of 272,918 bytes of the 350,000-byte budget. Before the minimal pass, the WASM file was 338,828 bytes.</p>
   <p>On 9 November 2026, after page tools (WebMCP) were added, the results were: 26 native Rust tests, 15 gateway tests, 8 upstream-script tests, 94 browser checks (with <code>fixtures/map</code> written again by <code>tools/narrow.py</code>), and a WASM file of 274,139 bytes after the unused model-parameter code was deleted. The 94 browser checks also passed in Chrome 153 with native WebMCP (<code>--enable-features=WebMCPTesting,WebMCP</code>), without the shim.</p>
   <p>On 9 November 2026, after the turn limit became configurable: 26 native Rust tests, 8 upstream-script tests, 3 proxy tests, 15 gateway tests, 97 browser checks with the shim and 97 with native WebMCP, and a WASM file of 274,398 bytes.</p>
-  <p>On 12 November 2026, the code was compared with the current MCP, WebMCP, compaction and prompt-cache sources (section 24.1). The behavior did not change. The results were:</p>
+  <p>On 12 November 2026, the code was compared with the current MCP, WebMCP, compaction and prompt-cache sources (section 24.1). One behavior changed: the catalog loader now rejects a skill name of more than 128 characters (section 9.5). The results were:</p>
   <ul>
     <li>26 native Rust tests.</li>
     <li>15 gateway tests, 10 upstream-script tests, and the exporter, demo server and proxy suites.</li>
@@ -1747,7 +1747,7 @@ e2e.main()</code></pre></li>
   <p>The earlier long-running harness articles were also reviewed. This project does not require their multi-session development environment. <a href="#ref-long-running">[LONG-RUNNING]</a> <a href="#ref-harness-design">[HARNESS-DESIGN]</a></p>
   <p>The RMCP documentation was checked for protocol behavior and transport interfaces. RMCP is not a dependency of this implementation. <a href="#ref-rmcp-client">[RMCP-CLIENT]</a> <a href="#ref-rmcp-server">[RMCP-SERVER]</a></p>
   <h3 id="review-2026-11-12">24.1 Review of 12 November 2026</h3>
-  <p>On 12 November 2026, the implementation was compared with the current sources for each of its five topics. The purpose was to find code to delete and code to make faster. The review found that the code already agreed with the sources. It changed no behavior.</p>
+  <p>On 12 November 2026, the implementation was compared with the current sources for each of its five topics. The purpose was to find code to delete and code to make faster. The review found that the code already agreed with the sources. It changed one behavior: a skill name of more than 128 characters is now invalid, because the catalog loader uses the name check of the MCP client.</p>
   <figure>
     <a href="images/review-result.svg"><img src="images/review-result.svg" width="600" height="300" loading="lazy" alt="Five topics were compared with current sources on 12 November 2026. MCP, WebMCP, compaction and the prompt cache needed no change. Three WASM size variants were measured and none was applied."></a>
     <figcaption><strong>Figure 18.</strong> The result of the review for each topic.</figcaption>

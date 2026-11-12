@@ -160,7 +160,7 @@ metadata:
 2. `activate_skill` fetches that skill's plain instructions and includes them in the next model request.
 3. `read_skill_resource` fetches one listed resource of an active skill.
 
-Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys, and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
+Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys and use 1 to 128 ASCII letters, numbers, dots, underscores, or hyphens (the tool-name rule), and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
 
 Activations survive later turns and session replay. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
 
@@ -220,7 +220,7 @@ These are implementation choices informed by those sources, not a claim that bro
 
 Current glue adds 6,128 bytes gzip. WASM initialization measured 3.9 ms cold and 1.8 ms warm median. A warm local MCP tool round trip measured 0.70 ms median over 20 calls. These exclude model latency and real-network cost. Source counts include the core, adapters, browser binding, and small inline tests; separate test files are excluded. Source and bundle changes intentionally remove APIs; the smaller artifact is not a performance comparison with equivalent feature sets.
 
-2026-11-12, after page tools and a review pass that changed no behavior: 274,099 bytes raw, 119,685 gzip, glue 6,258 gzip. Measured and not applied: `strip = true` (274,465), no SIMD (276,386), no panic hook (272,223, but panics lose their console message).
+2026-11-12, after page tools and a review pass with one behavior change (a skill name over 128 characters is now rejected): 274,099 bytes raw, 119,685 gzip, glue 6,258 gzip. Measured and not applied: `strip = true` (274,465), no SIMD (276,386), no panic hook (272,223, but panics lose their console message).
 
 ## License
 
