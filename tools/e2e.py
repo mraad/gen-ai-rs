@@ -696,6 +696,8 @@ class FakeRwee(BaseHTTPRequestHandler):
 
 class FakeMapModel(BaseHTTPRequestHandler):
     """An OpenAI-compatible model: asks for two layers with demo_query, then answers."""
+    models = []  # the model name of each request, so a test can tell which session sent it
+
     def log_message(self, *args):
         pass
 
@@ -711,6 +713,7 @@ class FakeMapModel(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeMapModel.models.append(body["model"])
         if any(m["role"] == "tool" for m in body["messages"]):
             events = [{"choices": [{"delta": {"role": "assistant", "content": "The wells and the pipeline are on the map."}}]},
                       {"choices": [{"delta": {}, "finish_reason": "stop"}]}]
@@ -765,6 +768,7 @@ def wait(browser, condition, seconds):
 def test_map(browser):
     """map.html needs the network: it loads the ArcGIS Maps SDK and the basemap tiles."""
     model = serve(FakeMapModel)
+    FakeMapModel.models = []
     page = {"title": "Test map", "placeholder": "Show the wells", "center": [3, 58], "zoom": 5}
     with map_gateway(page, model) as port:
         browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.__errors = []; addEventListener('error', (e) => __errors.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errors.push(String(e.reason)));"})
@@ -774,9 +778,19 @@ def test_map(browser):
         shown = browser.run("""done([document.title, document.getElementById("title").textContent, document.getElementById("prompt").placeholder,
           Math.round(gaitMap.center.longitude), Math.round(gaitMap.center.latitude), gaitMap.zoom])""")
         check("map: title, placeholder and view come from the gateway's map.json", shown == ["Test map", "Test map", "Show the wells", 3, 58, 5], shown)
-        browser.run(f"""document.getElementById("model").value = "openai/test";
-          document.getElementById("base").value = "http://localhost:{model.server_address[1]}";
-          document.getElementById("connect").click(); done()""")
+        # Two Connect clicks: the first session is held at its tools/list until the second is ready.
+        browser.run("""const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), real = window.fetch;
+          let release, held = false; const gate = new Promise((r) => { release = r; });
+          window.fetch = async (input, init) => {
+            if (!held && new URL(input.url ?? input, location).pathname === "/mcp") { held = true; await gate; }
+            return real(input, init);
+          };
+          document.getElementById("base").value = "http://localhost:PORT";
+          document.getElementById("model").value = "openai/older"; document.getElementById("connect").click();
+          while (!held) await sleep(5);
+          document.getElementById("model").value = "openai/newer"; document.getElementById("connect").click();
+          while (document.getElementById("phase").textContent !== "Ready") await sleep(5);
+          release(); await sleep(300); window.fetch = real; done()""".replace("PORT", str(model.server_address[1])))
         state = wait(browser, lambda s: s["phase"] == "Ready", 20)
         names = {"geojson": "GeoJSON", "parquet": "GeoParquet"}
         for fmt in ("parquet", "geojson"):
@@ -794,6 +808,8 @@ def test_map(browser):
             check(f"map: {names[fmt]} wells are colored by their color column, diverging around 0; pipes are not",
                   ramps == {"wells": [["color", [-0.7071, 0, 0.7071]]], "pipes": []}, ramps)
             check(f"map: {names[fmt]} turn ends with the answer and no page errors", "on the map" in state["answer"] and not state["err"], state)
+            if fmt == "parquet":
+                check("map: an older Connect click cannot replace the newer session", set(FakeMapModel.models) == {"newer"}, FakeMapModel.models)
         browser.run('document.querySelector("[data-format=parquet]").click(); done()')
         time.sleep(1)
         state = browser.run(MAP_STATE)
