@@ -46,6 +46,24 @@ class Narrow(unittest.TestCase):
         os.environ["RWEE_ARTIFACT_DIR"] = str(self.art)
         self.addCleanup(os.environ.pop, "RWEE_ARTIFACT_DIR")
 
+    def test_nan_and_infinity_become_null_so_the_output_is_valid_json(self):
+        sql = "SELECT * FROM (VALUES ('nan'::DOUBLE, ST_Point(1, 2)), ('inf'::DOUBLE, ST_Point(3, 4)), (1.5, ST_Point(5, 6))) t(v, geometry)"
+        strict = {"parse_constant": lambda c: self.fail(f"invalid JSON constant {c}")}
+        for fmt in narrow.FORMATS:
+            out = narrow.query(self.db, [{"name": "result", "sql": sql}], fmt)["layers"][0]
+            self.assertEqual(out["rows"], [[None], [None], [1.5]])
+            self.assertEqual(out["stats"]["v"], {"nulls": 2, "min": 1.5, "max": 1.5})
+            json.loads(json.dumps(out, default=str), **strict)
+        features = json.loads((self.art / "result.geojson").read_text(), **strict)["features"]
+        self.assertEqual([f["properties"]["v"] for f in features], [None, None, 1.5])
+
+    def test_column_names_with_a_double_quote_work_in_both_formats(self):
+        sql = 'SELECT name AS "say ""hi""", geometry AS "g""h" FROM Wells ORDER BY OBJECTID'
+        for fmt in narrow.FORMATS:
+            out = narrow.query(self.db, [{"name": "result", "sql": sql}], fmt)["layers"][0]
+            self.assertEqual((out["columns"], out["geometry"], out["row_count"]), (['say "hi"'], 'g"h', 2))
+        self.assertTrue((self.art / "result.parquet").is_file())
+
     def test_geometry_query_writes_only_the_chosen_file(self):
         out = one(self.db, "SELECT OBJECTID, name, depth, geometry AS g FROM Wells ORDER BY OBJECTID;")
         self.assertEqual(out["columns"], ["OBJECTID", "name", "depth"])

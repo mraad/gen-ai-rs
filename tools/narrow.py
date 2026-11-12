@@ -11,6 +11,7 @@ cannot read other files, attach, copy out or change settings. Only the run's art
 reachable, for the GeoParquet write.
 """
 import json
+import math
 import os
 import re
 import sys
@@ -84,6 +85,11 @@ def column_stats(values):
     return stats
 
 
+def quote(name):
+    """A column name as a SQL identifier; a double quote inside it is doubled."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def run_one(con, art, name, sql, print_rows, fmt):
     sql = sql.strip().rstrip(";")
     con.execute("DROP TABLE IF EXISTS temp.main.result")  # the last query's temp table would hide a database table named result
@@ -92,16 +98,17 @@ def run_one(con, art, name, sql, print_rows, fmt):
     # The query runs once, into a temporary table; the rows and the file come from it. One extra row tells if it was cut.
     con.execute(f"CREATE OR REPLACE TEMP TABLE result AS SELECT * FROM (\n{sql}\n) LIMIT {MAX_ROWS + 1}")
     if geo and fmt == "parquet":  # GeoParquet V1 for the ArcGIS ParquetLayer: one column named geometry, DOUBLE not DECIMAL
-        pick = [f'"{c[0]}" AS geometry' if c[0] == geo[0] else None if c[0] in geo else
-                f'CAST("{c[0]}" AS DOUBLE) AS "{c[0]}"' if str(c[1]).startswith("DECIMAL") else f'"{c[0]}"' for c in columns]
+        pick = [f"{quote(c[0])} AS geometry" if c[0] == geo[0] else None if c[0] in geo else
+                f"CAST({quote(c[0])} AS DOUBLE) AS {quote(c[0])}" if str(c[1]).startswith("DECIMAL") else quote(c[0]) for c in columns]
         con.execute(f"COPY (SELECT {', '.join(p for p in pick if p)} FROM result LIMIT {MAX_ROWS}) TO '{art}/{name}.parquet' "
                     "(FORMAT PARQUET, COMPRESSION SNAPPY, GEOPARQUET_VERSION 'V1')")
     # GeoJSON needs each geometry as text; GeoParquet is already written, so the rows only need the type.
     convert = "ST_AsGeoJSON({})" if fmt == "geojson" else "ST_GeometryType({})::VARCHAR"
-    replace = ", ".join(convert.format(f'"{g}"') + f' AS "{g}"' for g in geo)
+    replace = ", ".join(convert.format(quote(g)) + f" AS {quote(g)}" for g in geo)
     cur = con.execute(f"SELECT * {f'REPLACE ({replace})' if geo else ''} FROM result")
     names = [d[0] for d in cur.description]
-    rows = cur.fetchall()
+    # JSON has no NaN or Infinity: json.dumps would write them bare, and the page could not parse the result.
+    rows = [tuple(None if isinstance(v, float) and not math.isfinite(v) else v for v in r) for r in cur.fetchall()]
     truncated = len(rows) > MAX_ROWS
     rows = rows[:MAX_ROWS]
     plain = [n for n in names if n not in geo]
