@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures::executor::block_on;
-use gait_core::agent::{check_args, Agent, Ctx, ToolDef, ToolOutput};
+use gait_core::agent::{check_args, Agent, Ctx, ToolDef};
 use gait_core::cancel::Cancel;
 use gait_core::compaction::Compaction;
 use gait_core::dialog::{Dialog, Message, ToolCall, ToolFunction};
@@ -281,7 +281,7 @@ fn duplicate_names_including_internal_skill_tools_are_rejected() {
         name: name.into(),
         description: String::new(),
         parameters: json!({}),
-        func: Rc::new(|_, _| Box::pin(async { Ok(ToolOutput::Text(String::new())) })),
+        func: Rc::new(|_, _| Box::pin(async { Ok(String::new()) })),
     };
     for tools in [
         vec![tool("duplicate"), tool("duplicate")],
@@ -321,7 +321,7 @@ fn counted_tool(calls: Rc<RefCell<usize>>) -> ToolDef {
         parameters: json!({"type": "object", "properties": {}}),
         func: Rc::new(move |_, _| {
             *calls.borrow_mut() += 1;
-            Box::pin(async { Ok(ToolOutput::Text("written".into())) })
+            Box::pin(async { Ok("written".into()) })
         }),
     }
 }
@@ -443,7 +443,7 @@ fn a_turn_that_grows_too_long_compacts_earlier_turns_once() {
         name: "fetch".into(),
         description: "Fetch a long result.".into(),
         parameters: json!({"type": "object", "properties": {}}),
-        func: Rc::new(|_, _| Box::pin(async { Ok(ToolOutput::Text("r".repeat(3000))) })),
+        func: Rc::new(|_, _| Box::pin(async { Ok("r".repeat(3000)) })),
     };
     let model = Model::new(vec![
         asks("fetch", json!({})),

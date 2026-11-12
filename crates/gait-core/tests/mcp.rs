@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures::executor::block_on;
-use gait_core::agent::{check_args, ToolOutput};
+use gait_core::agent::check_args;
 use gait_core::llm::{Http, HttpResponse};
 use gait_core::mcp;
 use gait_core::observer::Trace;
@@ -94,7 +94,7 @@ fn discovers_and_calls_tools_without_retries() {
     let args = json!({"text": "hello"});
     check_args(&tools[0].parameters, &args).unwrap();
     let result = block_on((tools[0].func)(args, Scratchpad::new())).unwrap();
-    assert_eq!(result, ToolOutput::Text("ok".into()));
+    assert_eq!(result, "ok".to_owned());
     let sent = server.sent.borrow();
     assert_eq!(sent.len(), 2);
     let (body, headers) = &sent[1];
@@ -114,7 +114,7 @@ fn pagination_and_json_or_sse_work() {
         assert_eq!(tools.len(), if mode == "pages" { 2 } else { 1 });
         assert_eq!(
             block_on((tools[0].func)(json!({}), Scratchpad::new())).unwrap(),
-            ToolOutput::Text("ok".into())
+            "ok".to_owned()
         );
         assert_eq!(
             server.sent.borrow().len(),

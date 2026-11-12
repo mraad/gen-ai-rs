@@ -13,13 +13,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-type ToolFuture = Pin<Box<dyn Future<Output = Result<ToolOutput>>>>;
+type ToolFuture = Pin<Box<dyn Future<Output = Result<String>>>>;
 type ToolFn = dyn Fn(Value, Scratchpad) -> ToolFuture;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ToolOutput {
-    Text(String),
-}
 
 #[derive(Clone)]
 pub struct ToolDef {
@@ -350,10 +345,7 @@ impl Agent {
                         (tool.func)(args, work.scratchpad.clone()).await
                     })
                     .await?;
-                let mut text = match output {
-                    Ok(ToolOutput::Text(text)) => text,
-                    Err(error) => format!("Tool error: {error}"),
-                };
+                let mut text = output.unwrap_or_else(|error| format!("Tool error: {error}"));
                 truncate_middle(&mut text, 30_000);
                 work.trace.event("tool_end", name);
                 work.dialog.push(Message::tool(text, name, &call.id));

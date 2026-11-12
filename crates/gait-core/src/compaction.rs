@@ -69,14 +69,14 @@ impl Compaction {
         llm: &dyn LlmClient,
         ctx: &Ctx,
     ) -> Result<Option<Usage>> {
-        if dialog.token_estimate() <= self.limit() {
+        let tokens = dialog.token_estimate();
+        if tokens <= self.limit() {
             return Ok(None);
         }
         let messages = dialog.messages();
         let Some(cut) = self.cut_point(&messages) else {
             return Ok(None);
         };
-        let tokens = dialog.token_estimate();
         let mut transcript: String = messages[..cut]
             .iter()
             .map(|m| {

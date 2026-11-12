@@ -1,6 +1,6 @@
 //! Browser fetch, host events, and a single-session API.
 use async_trait::async_trait;
-use gait_core::agent::{Agent, Ctx, ToolDef, ToolOutput};
+use gait_core::agent::{Agent, Ctx, ToolDef};
 use gait_core::cancel::Cancel;
 use gait_core::dialog::{Dialog, Message};
 use gait_core::kb::Kb;
@@ -290,7 +290,7 @@ async fn page_tools(trace: &Trace) -> Vec<ToolDef> {
                         Ok(Value::String(s)) => json!({"content": [{"type": "text", "text": s}]}),
                         _ => json!({"content": [{"type": "text", "text": text}]}),
                     };
-                    gait_core::mcp::result_text(&value).map(ToolOutput::Text)
+                    gait_core::mcp::result_text(&value)
                 })
             }),
         });

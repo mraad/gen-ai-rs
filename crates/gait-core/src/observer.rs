@@ -43,15 +43,12 @@ impl Trace {
     pub fn noop() -> Self {
         Self::new(Rc::new(NoopObserver), Rc::new(|| 0.0), "noop")
     }
-    pub fn now_ms(&self) -> f64 {
-        (self.clock)()
-    }
     pub fn event(&self, category: &str, message: impl Into<String>) {
         self.event_with(category, message, Value::Null);
     }
     pub fn event_with(&self, category: &str, message: impl Into<String>, attrs: Value) {
         self.sink.emit(&Event {
-            ts_ms: self.now_ms(),
+            ts_ms: (self.clock)(),
             run_id: self.run_id.clone(),
             category: category.into(),
             message: message.into(),
