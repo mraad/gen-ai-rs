@@ -108,6 +108,10 @@ class Browser:
             f"--remote-debugging-port={port}",
             f"--user-data-dir={self.profile.name}",
             "--no-first-run",
+            # In a new profile, Chrome's background networking changes the certificate verifier one time, a few
+            # seconds after the first HTTPS request. That fails the requests in flight
+            # (net::ERR_CERT_VERIFIER_CHANGED), and one failed ArcGIS SDK import stops map.html.
+            "--disable-background-networking",
             "--window-size=1280,900",
             "about:blank",
         ]
@@ -815,7 +819,7 @@ def test_map_tools(browser):
     """The map page registers its page tools; needs the network for the ArcGIS SDK, not fixtures/map."""
     with map_gateway({"center": [3, 58], "zoom": 5}) as port:
         browser.goto(f"http://localhost:{port}/map.html")
-        state = wait(browser, lambda s: s["phase"] == "Ready", 60)
+        state = wait(browser, lambda s: s["phase"] == "Ready" or s["phase"].startswith("Could not"), 60)
         check("map tools: the map page is ready (needs the network for the ArcGIS SDK)", state["phase"] == "Ready", state)
         if state["phase"] != "Ready":
             return
@@ -880,6 +884,14 @@ def test_map_tools(browser):
             check("map tools: map_clear removes every layer and keeps the basemap", out["after"] == [0, 0, 1] and "layers" in out["cleared"], out)
         else:
             print(f"SKIP  map tools: file checks need {MAP_FIXTURES}")
+        # One blocked SDK module: the page must report it, not stay at "Connecting…".
+        browser.call("Network.enable")
+        browser.call("Network.setBlockedURLs", {"urls": ["*/views/MapView.js"]})
+        browser.goto(f"http://localhost:{port}/map.html")
+        failed = wait(browser, lambda s: s["phase"].startswith("Could not"), 20)
+        browser.call("Network.setBlockedURLs", {"urls": []})
+        browser.call("Network.disable")
+        check("map tools: a failed SDK import shows an error and asks for a reload", failed["phase"].startswith("Could not load the map SDK") and failed["phase"].endswith("Reload the page."), failed)
 
 
 def run_wasm_tests(browser, url):
