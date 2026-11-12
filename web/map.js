@@ -1,17 +1,23 @@
 // Chat with the WASM agent; draw the one GeoJSON or GeoParquet file that a narrow query tool call writes for each layer.
 import init, { GaitSession } from "./pkg/gait_wasm.js";
 
+const $ = (id) => document.getElementById(id);
 const SDK = "https://js.arcgis.com/5.2/@arcgis/core";
+// One failed module request stops this script, so say so; the page would otherwise stay at "Connecting…".
+const sdkFailed = (error) => {
+  $("live").dataset.state = "error";
+  $("phase").textContent = `Could not load the map SDK: ${error.message}. Reload the page.`;
+  throw error;
+};
 const [{ default: esriConfig }, { default: Map }, { default: MapView }, { default: TileLayer },
   { default: GeoJSONLayer }, { default: ParquetLayer }, { default: ParquetFilesData }, { default: GeometryEncodingWkb },
   { default: Extent }, webMercatorUtils,
 ] = await Promise.all(["config", "Map", "views/MapView", "layers/TileLayer", "layers/GeoJSONLayer",
   "layers/ParquetLayer", "layers/support/ParquetFilesData", "layers/support/GeometryEncodingWkb",
-  "geometry/Extent", "geometry/support/webMercatorUtils"].map((name) => import(`${SDK}/${name}.js`)));
+  "geometry/Extent", "geometry/support/webMercatorUtils"].map((name) => import(`${SDK}/${name}.js`))).catch(sdkFailed);
 esriConfig.assetsPath = `${SDK}/assets`;
-await import("https://js.arcgis.com/calcite-components/5.2.0/index.js"); // registers the Calcite widgets that the zoom buttons and the popup use
+await import("https://js.arcgis.com/calcite-components/5.2.0/index.js").catch(sdkFailed); // registers the Calcite widgets that the zoom buttons and the popup use
 
-const $ = (id) => document.getElementById(id);
 // The gateway serves the dataset's page settings from its config; without them the page stays generic.
 const page = await fetch("map.json").then((r) => r.ok ? r.json() : {}).catch(() => ({}));
 if (page.title) document.title = $("title").textContent = page.title;
