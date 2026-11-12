@@ -1187,7 +1187,7 @@ Server routes:
     <caption>Fields of one query result</caption>
     <thead><tr><th scope="col">Field</th><th scope="col">Meaning</th></tr></thead><tbody>
       <tr><td><code>name</code></td><td>The query name.</td></tr>
-      <tr><td><code>columns</code>, <code>rows</code></td><td>Column names without geometry, and rows as lists. A result with geometry gives 10 sample rows. A result without geometry gives up to 200 rows, or 50 rows for each query when there are several.</td></tr>
+      <tr><td><code>columns</code>, <code>rows</code></td><td>Column names without geometry, and rows as lists. A result with geometry gives 10 sample rows. A result without geometry gives up to 200 rows, or 50 rows for each query when there are several. A NaN or infinite number is <code>null</code> in the rows, in <code>stats</code> and in the GeoJSON file, because JSON has no value for it.</td></tr>
       <tr><td><code>row_count</code>, <code>truncated</code></td><td>The number of rows read, at most 100,000. <code>truncated</code> is true when more rows exist.</td></tr>
       <tr><td><code>geometry</code></td><td>The name of the first GEOMETRY column, or <code>null</code>.</td></tr>
       <tr><td><code>stats</code></td><td>Results with geometry only. For each column: the number of nulls. For numbers and dates: also the minimum and the maximum.</td></tr>
@@ -1266,6 +1266,7 @@ Server routes:
     <li>To start a new conversation, press <strong>Clear</strong>. The page removes the saved conversation, every added map layer and any open popup. The basemap stays.</li>
   </ol>
   <p>The status line shows <code>Connecting…</code> while the page loads the ArcGIS Maps SDK and creates the session. It then shows <code>Ready</code>. If the request for one SDK module fails, the status line shows <code>Could not load the map SDK</code>, the reason, and <code>Reload the page.</code> The page does not load the SDK again by itself.</p>
+  <p>If you press <strong>Connect</strong> again before the session is ready, only the session from the last press stays. The page frees the older session when it arrives.</p>
   <p>The conversation survives a page reload (section 12.4). The layers do not.</p>
   <p>A link with <code>?q=...</code> fills the question box. It does not send the question. You press Send.</p>
   <p>A question that relates two tables, for example points near a line, gives two layers. Each layer has its own color. The page draws polygons first, then lines, then points. The map zooms to the extent of all layers.</p>
@@ -1548,6 +1549,7 @@ Server routes:
   </ul>
   <p>Two more edits changed no result: the compaction check estimates the dialog one time and not two times, and <code>Trace::now_ms</code> became part of <code>event_with</code>.</p>
   <p>Later on 12 November 2026, the cause of the map check failure was found and corrected (see the note in section 21.3). The map page now reports a failed SDK import, and the suite has one more check for that message. The results were: 102 browser checks in 6 of 6 runs with the shim, 102 browser checks in 2 of 2 runs with native WebMCP in Chrome 153 (<code>--enable-features=WebMCPTesting,WebMCP</code>, without the shim), and 3 WASM-specific tests.</p>
+  <p>On 12 November 2026, after an audit, four faults were corrected. A NaN or infinite number made the script print invalid JSON, so the map page drew nothing; it is now <code>null</code>. A column name with a double quote made the SQL fail; it is now quoted. On the map page, a slow first <strong>Connect</strong> could replace the session of a second one; the older session is now freed. The trace of the map page now also redacts <code>password=...</code> text and passwords in URLs. The results were: 12 upstream-script tests (2 new, both fail on the old script), 103 browser checks with the shim (1 new, it fails on the old map page), and 104 with native WebMCP in Chrome 153.</p>
   <h3>21.6 Measured build</h3>
   <div class="table-wrap"><table>
     <caption>Recorded artifact and source reduction</caption>
