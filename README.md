@@ -194,7 +194,7 @@ python3 tools/e2e.py
 python3 tools/measure.py
 ```
 
-`tools/e2e.py` also opens `map.html` through the real gateway, with a fake mcp-rwee and a fake model. It needs the network for the ArcGIS SDK and basemap, and checks that each format switch value writes and draws only that format, and that a `color` column gets a color ramp (local test data in `fixtures/map`, written by `tools/narrow.py` and kept out of git; without it the map checks print `SKIP`). Browser checks require a fresh release build and exported fixtures. WASM-only tests: run `wasm-pack test --chrome crates/gait-wasm`, then `python3 tools/e2e.py --wasm-tests http://127.0.0.1:8000/`.
+`tools/e2e.py` also opens `map.html` through the real gateway, with a fake mcp-rwee and a fake model. It needs the network for the ArcGIS SDK and basemap, and checks that each format switch value writes and draws only that format, and that a `color` column gets a color ramp (local test data in `fixtures/map`, written by `tools/narrow.py` and kept out of git; without it the map checks print `SKIP`). Browser checks require a fresh release build and exported fixtures. To test Chrome's native WebMCP instead of the shim, run `python3 tools/e2e.py --native-webmcp`; it adds one check that the shim is off. WASM-only tests: run `wasm-pack test --chrome crates/gait-wasm`, then `python3 tools/e2e.py --wasm-tests http://127.0.0.1:8000/`.
 
 ## Design sources reviewed, 2026-11-12
 

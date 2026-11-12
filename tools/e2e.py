@@ -99,7 +99,8 @@ class WebSocket:
 class Browser:
     """Headless Chrome, driven over its DevTools protocol, so no separate driver is needed."""
 
-    def __init__(self, binary):
+    def __init__(self, binary, native=False):
+        self.native = native
         self.profile = tempfile.TemporaryDirectory()
         port = free_port()
         args = [
@@ -115,6 +116,8 @@ class Browser:
             "--window-size=1280,900",
             "about:blank",
         ]
+        if native:
+            args.insert(1, "--enable-features=WebMCPTesting,WebMCP")
         self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         targets = None
         for _ in range(100):
@@ -488,6 +491,8 @@ def test_page_tools(browser):
     check("page tools: a registered tool runs and its MCP content reaches the model", out["echo"]["message"] == "echo 5", out["echo"])
     # Chrome's native WebMCP replaces the thrown message with a generic one; the shim keeps it.
     shim = out["shim"]
+    if browser.native:
+        check("page tools: Chrome's native WebMCP is active, not the shim", not shim, out)
     check("page tools: a throwing tool returns to the model as a tool error", "Tool error:" in out["thrown"]["message"] and (not shim or "page says no" in out["thrown"]["message"]), out["thrown"])
     check("page tools: cancel aborts the signal the running tool sees", out["cancelled"]["cancelled"] and out["aborted"] is True, out)
     check("page tools: tools are listed each turn; an unregistered tool is gone", "t_late" in out["seen"][-1] and "t_echo" not in out["seen"][-1] and "t_echo" in out["seen"][0], out["seen"])
@@ -910,8 +915,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chrome", default=os.environ.get("CHROME", DEFAULT_CHROME))
     parser.add_argument("--wasm-tests")
+    parser.add_argument("--native-webmcp", action="store_true", help="use Chrome's WebMCP instead of the shim")
     args = parser.parse_args()
-    browser = Browser(args.chrome)
+    browser = Browser(args.chrome, args.native_webmcp)
     server = None
     try:
         if args.wasm_tests:
