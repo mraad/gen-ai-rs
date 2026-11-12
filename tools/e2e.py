@@ -917,6 +917,8 @@ def main():
     parser.add_argument("--wasm-tests")
     parser.add_argument("--native-webmcp", action="store_true", help="use Chrome's WebMCP instead of the shim")
     args = parser.parse_args()
+    if args.wasm_tests and args.native_webmcp:
+        parser.error("--native-webmcp needs the full suite; --wasm-tests has no native WebMCP check")
     browser = Browser(args.chrome, args.native_webmcp)
     server = None
     try:
