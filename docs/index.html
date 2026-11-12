@@ -1511,16 +1511,9 @@ Server routes:
     </tbody>
   </table></div>
   <h4>Run the browser suite with native WebMCP</h4>
-  <p>The suite uses the shim by default. To test Chrome's own WebMCP, add the features to the Chrome command of the suite.</p>
+  <p>The suite uses the shim by default. To test Chrome's own WebMCP, use the <code>--native-webmcp</code> option. The suite then starts Chrome with <code>--enable-features=WebMCPTesting,WebMCP</code>, and one more check makes sure that the page does not use the shim.</p>
   <ol class="procedure">
-    <li>Make a small script in a scratch folder.<pre><code class="language-python">import sys
-sys.path.insert(0, &quot;tools&quot;)
-sys.argv = [&quot;e2e.py&quot;]
-import e2e
-start = e2e.subprocess.Popen
-e2e.subprocess.Popen = lambda args, **kw: start(args[:1] + [&quot;--enable-features=WebMCPTesting,WebMCP&quot;] + args[1:], **kw)
-e2e.main()</code></pre></li>
-    <li>Run the script from the repository root.<pre><code>python3 /path/to/native_e2e.py</code></pre></li>
+    <li>Run the browser suite with native WebMCP.<pre><code>python3 tools/e2e.py --native-webmcp</code></pre></li>
     <li>Compare the count of passed checks with the run that uses the shim.</li>
   </ol>
   <h3>21.4 WASM-specific tests</h3>
