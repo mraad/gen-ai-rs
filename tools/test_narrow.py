@@ -56,6 +56,10 @@ class Narrow(unittest.TestCase):
             json.loads(json.dumps(out, default=str), **strict)
         features = json.loads((self.art / "result.geojson").read_text(), **strict)["features"]
         self.assertEqual([f["properties"]["v"] for f in features], [None, None, 1.5])
+        nested = one(self.db, "SELECT ['nan'::DOUBLE, 2.0] AS l, {'x': 'inf'::DOUBLE} AS s, MAP {'k': '-inf'::DOUBLE} AS m, ST_Point(1, 2) AS geometry")
+        self.assertEqual(nested["rows"], [[[None, 2.0], {"x": None}, {"k": None}]])
+        json.loads(json.dumps(nested, default=str), **strict)
+        json.loads((self.art / "result.geojson").read_text(), **strict)
 
     def test_column_names_with_a_double_quote_work_in_both_formats(self):
         sql = 'SELECT name AS "say ""hi""", geometry AS "g""h" FROM Wells ORDER BY OBJECTID'

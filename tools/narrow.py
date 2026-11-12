@@ -85,6 +85,17 @@ def column_stats(values):
     return stats
 
 
+def finite(value):
+    """JSON has no NaN or Infinity: json.dumps would write them bare, and the page could not parse the result."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (list, tuple)):
+        return [finite(v) for v in value]
+    if isinstance(value, dict):  # STRUCT and MAP
+        return {k: finite(v) for k, v in value.items()}
+    return value
+
+
 def quote(name):
     """A column name as a SQL identifier; a double quote inside it is doubled."""
     return '"' + name.replace('"', '""') + '"'
@@ -107,8 +118,7 @@ def run_one(con, art, name, sql, print_rows, fmt):
     replace = ", ".join(convert.format(quote(g)) + f" AS {quote(g)}" for g in geo)
     cur = con.execute(f"SELECT * {f'REPLACE ({replace})' if geo else ''} FROM result")
     names = [d[0] for d in cur.description]
-    # JSON has no NaN or Infinity: json.dumps would write them bare, and the page could not parse the result.
-    rows = [tuple(None if isinstance(v, float) and not math.isfinite(v) else v for v in r) for r in cur.fetchall()]
+    rows = [tuple(finite(v) for v in r) for r in cur.fetchall()]
     truncated = len(rows) > MAX_ROWS
     rows = rows[:MAX_ROWS]
     plain = [n for n in names if n not in geo]
