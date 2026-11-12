@@ -244,7 +244,11 @@ function redact(value, key = "", depth = 0) {
   if (typeof value !== "string") return value;
   const apiKey = $("key").value;
   if (apiKey) value = value.split(apiKey).join("[REDACTED]");
-  return value.replace(/\b(?:Bearer|Basic)\s+[\w.+/=-]+/gi, "[REDACTED]").replace(/\bsk-[\w-]+/g, "[REDACTED]");
+  return value
+    .replace(/\b(?:Bearer|Basic)\s+[\w.+/=-]+/gi, "[REDACTED]")
+    .replace(/\b(?:password|passwd|passphrase|secret|token|api[_-]?key)\b["']?\s*(?:[:=]|\bis\b)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"'&,;]+)/gi, "[REDACTED]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+:[^\s/?#@]+@/gi, "$1[REDACTED]@")
+    .replace(/\bsk-[\w-]+/g, "[REDACTED]");
 }
 const clip = (text, max = 4000) => (text.length > max ? `${text.slice(0, max)}\n… ${text.length - max} more characters` : text);
 const pretty = (value) => clip(typeof value === "string" ? value : JSON.stringify(value, null, 2));
@@ -353,17 +357,19 @@ async function connect() {
   setStatus("Connecting…", "busy");
   const model = $("model").value;
   try {
-    session = await GaitSession.create({
+    const next = await GaitSession.create({
       kbUrl: "kb", mcpUrl: "/mcp", model, apiBase: $("base").value, apiKey: $("key").value, state: saved(),
       ...(model.startsWith("azure/") ? { apiVersion: "2024-10-21" } : {}),
       onEvent: (value) => { if (attempt === connection) onEvent(value); },
       onDelta: (text) => { live ??= message("assistant", ""); live.append(text); live.scrollIntoView({ block: "nearest" }); },
     });
+    if (attempt !== connection) { next.free(); return; } // a newer Connect click owns the page
+    session = next;
     if (!document.querySelector(".message")) // show a restored conversation once, not again on reconnect
       for (const m of session.state().dialog) if (["user", "assistant"].includes(m.role)) message(m.role, m.content);
     setStatus("Ready", "ok");
     $("send").disabled = false;
-  } catch (error) { setStatus(`Could not connect: ${error.message}. Clear removes the saved conversation.`, "error"); }
+  } catch (error) { if (attempt === connection) setStatus(`Could not connect: ${error.message}. Clear removes the saved conversation.`, "error"); }
 }
 async function send(question) {
   if (!question || !session || busy) return;
