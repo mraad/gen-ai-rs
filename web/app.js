@@ -51,8 +51,8 @@ function redact(value, key = "", depth = 0) {
   // shortcut: field names and common secret formats; hosts must classify domain-specific sensitive data.
   return value
     .replace(/\b(?:Bearer|Basic)\s+[\w.+/=-]+/gi, "[REDACTED]")
-    .replace(/\b(?:password|passwd|passphrase|secret|token|api[_-]?key)\b["']?\s*(?:[:=]|\bis\b)\s*["']?[^\s"'&,;]+/gi, "[REDACTED]")
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/\b(?:password|passwd|passphrase|secret|token|api[_-]?key)\b["']?\s*(?:[:=]|\bis\b)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"'&,;]+)/gi, "[REDACTED]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+:[^\s/?#@]+@/gi, "$1[REDACTED]@")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED]")
     .replace(/\b(?:sk-[\w-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+|[\w+/=-]{32,})\b/g, "[REDACTED]");
 }

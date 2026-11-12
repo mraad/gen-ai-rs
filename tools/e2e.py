@@ -570,6 +570,7 @@ def test_trace_redaction(browser):
         config.onEvent(incoming);
         config.onEvent({...incoming, message:'malformed', attrs:{arguments:'{"password":"hidden-malformed"'}});
         config.onEvent({...incoming, category:'error', message:'password=hidden-inline', attrs:null});
+        config.onEvent({...incoming, category:'error', message:'{"password":"alpha hidden-space, hidden-comma"} at https://example.test?next=a:b@c', attrs:null});
         config.onEvent({...incoming, category:'model_end', message:'answer', attrs:{usage:{prompt_tokens:7,completion_tokens:3,total_tokens:10}}});
         return original(config);
       };
@@ -591,9 +592,11 @@ def test_trace_redaction(browser):
     """)
     combined = out["text"] + out["exported"]
     hidden = ["hidden-password", "hidden-api-key", "hidden-token", "private@example.test", "1234",
-              "hidden-cookie", "hidden-bearer", "abcdefghijklmnopqrstuvwxyz0123456789", "entered-private-key", "hidden-malformed", "hidden-inline"]
+              "hidden-cookie", "hidden-bearer", "abcdefghijklmnopqrstuvwxyz0123456789", "entered-private-key", "hidden-malformed", "hidden-inline",
+              "hidden-space", "hidden-comma"]
     check("page: tool parameters redact nested credentials before display and export", all(value not in combined for value in hidden) and "[REDACTED]" in combined, out)
     check("page: redaction preserves numeric values and leaves source event unchanged", '"a":16,"b":0.8' in out["text"] and out["unchanged"], out)
+    check("page: a URL without credentials keeps its host and query", "https://example.test?next=a:b@c" in out["text"], out)
     check("page: malformed arguments never expose raw text", "[REDACTED: invalid arguments]" in combined, out)
     check("page: redaction preserves model token usage counts", '"prompt_tokens":7,"completion_tokens":3,"total_tokens":10' in out["exported"], out)
 

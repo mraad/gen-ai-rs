@@ -246,8 +246,8 @@ function redact(value, key = "", depth = 0) {
   if (apiKey) value = value.split(apiKey).join("[REDACTED]");
   return value
     .replace(/\b(?:Bearer|Basic)\s+[\w.+/=-]+/gi, "[REDACTED]")
-    .replace(/\b(?:password|passwd|passphrase|secret|token|api[_-]?key)\b["']?\s*(?:[:=]|\bis\b)\s*["']?[^\s"'&,;]+/gi, "[REDACTED]")
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/\b(?:password|passwd|passphrase|secret|token|api[_-]?key)\b["']?\s*(?:[:=]|\bis\b)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"'&,;]+)/gi, "[REDACTED]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+:[^\s/?#@]+@/gi, "$1[REDACTED]@")
     .replace(/\bsk-[\w-]+/g, "[REDACTED]");
 }
 const clip = (text, max = 4000) => (text.length > max ? `${text.slice(0, max)}\n… ${text.length - max} more characters` : text);
