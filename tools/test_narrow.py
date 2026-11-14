@@ -60,6 +60,42 @@ class Narrow(unittest.TestCase):
         (okf / "Wells.md").write_text("outside datasets/")
         return okf
 
+    def test_large_catalog_is_an_index_not_truncated_json(self):
+        okf = self.bundle()
+        path = okf / "Demo.ossie.json"
+        model = json.loads(path.read_text())
+        model["datasets"][0]["description"] = "detail " * 5000
+        path.write_text(json.dumps(model))
+        result = narrow.layers(okf)
+        self.assertIn("table index", result["detail"])
+        self.assertNotIn("columns", result["tables"][0])
+        self.assertLess(len(json.dumps(result)), 24000)
+        self.assertIn("well_name", narrow.layers(okf, "Wells"))
+
+    def test_large_page_returns_model_facts(self):
+        okf = self.bundle()
+        (okf / "datasets/Wells.md").write_text("prose " * 5000)
+        result = narrow.layers(okf, "Wells")
+        self.assertEqual(result["table_name"], "Wells")
+        self.assertTrue(any("well_name" in c for c in result["columns"]))
+        self.assertTrue(any(c.startswith("OBJECTID ") for c in result["columns"]))
+        self.assertIn("compact", result["detail"])
+
+    def test_display_name_source_and_page_are_distinct(self):
+        okf = self.bundle()
+        path = okf / "Demo.ossie.json"
+        model = json.loads(path.read_text())
+        model["custom_extensions"] = [{"vendor_name": "ARCGIS", "data": '{"source_prefix":"db.main"}'}]
+        model["datasets"][0].update(name="Deep Wells", source="db.main.wells_data")
+        path.write_text(json.dumps(model))
+        (okf / "datasets/Wells.md").rename(okf / "datasets/Deep_Wells.md")
+        self.assertEqual(narrow.layers(okf)["tables"][0]["table_name"], "wells_data")
+        self.assertEqual(narrow.layers(okf, "wells_data"), narrow.layers(okf, "Deep Wells"))
+        model["datasets"][1]["name"] = "../escape"
+        path.write_text(json.dumps(model))
+        with self.assertRaisesRegex(ValueError, "invalid OKF"):
+            narrow.layers(okf)
+
     def test_cards_come_from_the_ossie_model(self):
         out = narrow.layers(self.bundle())
         assert isinstance(out, dict)  # a table name would give the page text instead

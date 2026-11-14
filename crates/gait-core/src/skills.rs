@@ -103,9 +103,10 @@ impl SkillSet {
         for entry in self.active(pad) {
             let skill = &self.kb.skills[entry["name"].as_str().unwrap_or_default()];
             out.push_str(&format!(
-                "\n<skill_content name=\"{}\">\n{}\n</skill_content>",
+                "\n<skill_content name=\"{}\">\n{}\nResources: {}\n</skill_content>",
                 skill.name,
-                self.body(skill).await?
+                self.body(skill).await?,
+                escape(&skill.resources.join(", "))
             ));
         }
         Ok(out)

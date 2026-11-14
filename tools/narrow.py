@@ -110,16 +110,53 @@ def layers(okf, table=None):
     if len(models) != 1:
         raise SystemExit(f"the OKF folder needs exactly one *.ossie.json, found {len(models)}")
     model = json.loads(models[0].read_text(encoding="utf-8"))
+    prefix = extension(model, "ARCGIS").get("source_prefix")
+    datasets = []
+    seen_tables, seen_pages = set(), set()
+    for dataset in model["datasets"]:
+        if extension(dataset, "ARCGIS").get("view") is False:
+            continue
+        source = dataset.get("source", dataset["name"])
+        sql_name = source.removeprefix(f"{prefix}.") if prefix else source
+        stem = dataset["name"].replace(" ", "_")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stem):
+            raise ValueError(f"invalid OKF concept name: {dataset['name']}")
+        if sql_name.casefold() in seen_tables or stem.casefold() in seen_pages:
+            raise ValueError("ambiguous OKF table or concept filename")
+        seen_tables.add(sql_name.casefold())
+        seen_pages.add(stem.casefold())
+        datasets.append((dataset, sql_name, stem))
     if table is None:
-        out = {"legend": CARD_LEGEND, "tables": [card(d) for d in model["datasets"]]}
+        cards = []
+        for dataset, sql_name, _ in datasets:
+            item = card(dataset)
+            item["table_name"] = sql_name
+            if sql_name != dataset["name"]:
+                item["name"] = dataset["name"]
+            cards.append(item)
+        out = {"legend": CARD_LEGEND, "tables": cards}
         if model.get("relationships"):
             out["relationships"] = [relationship(r) for r in model["relationships"]]
+        # Large catalogs must fit the executor output and the harness tool budget.
+        if len(json.dumps(out, ensure_ascii=False)) > 24_000:
+            for item in cards:
+                item.pop("columns")
+                item["about"] = item["about"][:160]
+            out["detail"] = "Large catalog: table index only. Request each relevant table for columns, codes and rules."
         return out
-    # The page path uses the model's own name, never the caller's text.
-    name = next((d["name"] for d in model["datasets"] if d["name"].lower() == table.lower()), None)
-    if name is None:
-        raise SystemExit(f"unknown table {table}; call without a table to list them")
-    return (Path(okf) / "datasets" / f"{name}.md").read_text(encoding="utf-8")
+    matches = [(d, stem) for d, sql_name, stem in datasets
+               if table.casefold() in (d["name"].casefold(), sql_name.casefold())]
+    if len(matches) != 1:
+        raise SystemExit(f"unknown or ambiguous table {table}; call without a table to list them")
+    page = (Path(okf) / "datasets" / f"{matches[0][1]}.md").read_text(encoding="utf-8")
+    if len(page) > 24_000:
+        item = card(matches[0][0])
+        item["columns"] = [column_card(f) for f in matches[0][0]["fields"] if f["datatype"] != "Geometry"]
+        item["table_name"] = next(sql_name for d, sql_name, _ in datasets if d is matches[0][0])
+        item["detail"] = "Large concept page: compact model facts, without generated prose."
+        return item
+    return page
+
 
 
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -214,10 +251,24 @@ def query(database, queries, fmt="geojson"):
         return {"layers": [run_one(con, art, q["name"], q["sql"], shown, fmt) for q in queries]}
 
 
+def validate(database, okf):
+    """Fail startup when the catalog, database, and concept pages disagree."""
+    import duckdb
+    catalog = layers(okf)
+    with duckdb.connect(database, read_only=True) as con:
+        available = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+        for item in catalog["tables"]:
+            table = item["table_name"]
+            if table not in available:
+                raise ValueError(f"OKF table missing from database: {table}")
+            layers(okf, table)
+    return {"tables": len(catalog["tables"])}
+
+
 if __name__ == "__main__":
     try:
         command, *args = sys.argv[1:]
-        result = {"layers": layers, "query": query}[command](*args)
+        result = {"layers": layers, "query": query, "validate": validate}[command](*args)
     except (ValueError, KeyError, TypeError) as error:
         sys.exit(f"usage error: {error!r}")
     except Exception as error:  # noqa: BLE001 - DuckDB errors go back to the model as text

@@ -174,6 +174,10 @@ fn skills_load_progressively_and_stay_active_without_tool_history() {
         .text()
         .unwrap()
         .contains("Use the factor"));
+    assert!(model.requests.borrow()[0].messages[0]
+        .text()
+        .unwrap()
+        .contains("Resources: references/factors.md"));
     assert_eq!(
         http.reads
             .borrow()

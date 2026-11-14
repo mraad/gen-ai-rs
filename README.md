@@ -95,6 +95,20 @@ The dataset's skill carries the SQL rules (tables, units, distance projection). 
 
 **Map page.** Open `http://localhost:8080/map.html` (use `localhost`, which the Azure proxy allows). It runs the same WASM agent (`pkg/gait_wasm.js`) beside an ArcGIS Maps SDK for JavaScript 5.2 map. Ask for features; the page reads the file URLs from the `NAME_query` result and draws them with `GeoJSONLayer`, or with `ParquetLayer` when GeoParquet was selected. The GeoJSON and GeoParquet switch above the question box applies to the next question, because only that one file is written. `?q=...` fills the question box; you press Send. The left panel shows the agent at work: a progress bar and a live status line, then one row per model call (messages sent, reply, that call's tokens) and per tool call (arguments, result, time) under each turn, with totals on the turn header; the Trace box hides the rows. If a module of the ArcGIS SDK does not load, the status line says so and asks for a reload. The page is dark, with Esri's Dark Gray Canvas basemap, a keyless tile service (CARTO dark tiles now need a key). The gateway has no user authentication. Details: `docs/index.html`, sections 16 (gateway and map page) and 17 (token cost).
 
+## Optional read-only MCP service
+
+`tools/dataset_mcp.py` exposes the gateway's two configured catalog/query tools as a FastMCP HTTP service for Claude Code and the browser. Install `fastmcp>=4.1,<5` in its environment; the gateway remains standard-library-only. Keep mcp-rwee private and give the façade a separate token of at least 32 characters:
+
+```sh
+DATASET_MCP_TOKEN=... python3 tools/dataset_mcp.py dataset.json --port 8766
+```
+
+The config is the existing narrow-mode gateway config; its `mcp.tokenEnv` names the private upstream token. Startup validates the catalog, SQL table names, and concept pages against the upstream database. If `kb` is set, its configured skill body supplies server instructions. Claude connects to `http://127.0.0.1:8766/mcp` with the façade token. For the browser, use a second gateway config in passthrough mode pointing to the façade and its token, with the same kb and map settings. The format header and artifact ranges pass through both services.
+
+Artifact downloads require façade authentication and are limited to its last 1,000 returned paths; restarting the façade clears that list. The underlying executor still owns expiration. SQL runs finish or hit their execution timeout even if the façade client disconnects. This service is additional; existing dataset MCP registrations remain intact.
+
+Catalog cards use the model's `source` minus `ARCGIS.source_prefix` for SQL names, while Markdown pages follow the exporter’s validated display-name filename convention. Display labels are not SQL identifiers. Catalogs over 24,000 characters return an index; large concept pages return compact model facts so the executor and harness do not truncate them.
+
 ## Host API
 
 ```js
@@ -162,7 +176,7 @@ metadata:
 
 Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys and use 1 to 128 ASCII letters, numbers, dots, underscores, or hyphens (the tool-name rule), and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
 
-Activations survive later turns and session replay. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
+Activations survive later turns and session replay. Active skill blocks retain the listed resource paths so they remain available after tool history is discarded. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
 
 ## State and events
 

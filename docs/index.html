@@ -689,7 +689,7 @@ await document.modelContext.registerTool({
   <h3>9.2 Activation</h3>
   <p>The model calls <code>activate_skill</code> with one catalog name. The harness fetches <code>instructions.md</code> for that skill.</p>
   <p>The activation result tells the model that the skill is active. It also lists resource paths.</p>
-  <p>The next model request contains the active body in a <code>&lt;skill_content&gt;</code> block. The harness does not repeat the full body in the activation tool result.</p>
+  <p>The next model request contains the active body in a <code>&lt;skill_content&gt;</code> block. The harness does not repeat the full body in the activation tool result. Active skill blocks retain the listed resource paths so they remain available after tool history is discarded.</p>
   <p>An activation becomes shared session state only when the turn succeeds. A failed turn discards its uncommitted activation changes.</p>
   <h3>9.3 Resources</h3>
   <p>The model calls <code>read_skill_resource</code> with a name and path. The skill must be active for its current hash.</p>
@@ -1885,5 +1885,6 @@ Server routes:
   <p>Guide scope: the checked-in minimal harness, the <code>mcp-rwee</code> gateway and the map page. This page is static HTML with local SVG figures. It has no documentation JavaScript dependency.</p>
   <p><a href="#scope">Return to the start</a> · <a href="../README.md">Open README.md</a></p>
 </footer>
+<section><h2>Additional read-only dataset MCP</h2><p><code>tools/dataset_mcp.py</code> exposes the existing narrow catalog/query implementation through FastMCP HTTP for Claude and the browser. It uses a separate client token, validates database tables and OKF pages at startup, and never exposes raw execution tools. A passthrough browser gateway points to this service, not to the executor. Existing dataset servers remain available independently.</p><p>Catalog SQL names come from source and source_prefix; concept filenames follow the exporter’s validated display-name convention. Large catalogs return an index and large concept pages return compact model facts, avoiding executor truncation. Dataset overlays carry authored units, effective dates and verified relationships. Generate OKF with the overlay rather than editing the bundle.</p><p>Artifact access covers the last 1,000 paths returned by this service and resets on restart. Upstream execution continues until completion or timeout after client disconnect. See the README for launch configuration.</p></section>
 </body>
 </html>
