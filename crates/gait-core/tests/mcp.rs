@@ -170,3 +170,19 @@ fn result_text_reads_mcp_shapes_and_rejects_others() {
     assert!(text(json!({"content": [{"type": "text", "text": "bad"}], "isError": true})).is_err());
     assert!(mcp::valid_name("map_zoom_to") && !mcp::valid_name("a b") && !mcp::valid_name(""));
 }
+
+#[test]
+fn text_pages_preserve_quotes_and_continuation_without_expansion() {
+    let concept = "\"x\"\n".repeat(5000);
+    let page =
+        json!({"text": "\"x\"\n".repeat(2000), "offset": 0, "next_offset": 8000}).to_string();
+    for expected in [concept, page] {
+        let wire = json!({"content": [{"type": "text", "text": expected}]}).to_string();
+        let actual = mcp::result_text(&serde_json::from_str(&wire).unwrap()).unwrap();
+        assert_eq!(actual, expected);
+        assert!(actual.len() <= 24000);
+        if let Ok(page) = serde_json::from_str::<Value>(&actual) {
+            assert_eq!(page["next_offset"], 8000);
+        }
+    }
+}

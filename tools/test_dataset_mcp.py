@@ -1,5 +1,7 @@
 """Optional façade tests: run with FastMCP installed."""
+import json
 import unittest
+import narrow
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from unittest.mock import patch
@@ -27,6 +29,36 @@ class DatasetMcp(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ToolError):
                     await client.call_tool("execute", {"target": "echo no"})
             self.assertEqual(calls, [("roads_layers", {}, "geojson"), ("roads_layers", {"offset": 8000}, "geojson"), ("roads_query", {"sql": "select 1"}, "geojson")])
+
+    async def test_text_pages_are_not_wrapped_as_structured_content(self):
+        cfg = dict(mode="narrow", name="roads", about="roads", skill="roads-sql")
+        def run(up, cfg, name, args, fmt, on_artifacts):
+            value = narrow.layers("unused", args.get("table"), args.get("offset", 0))
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            return {"content": [{"type": "text", "text": text}]}
+        with patch("dataset_mcp.narrow_call", run):
+            async with Client(build(cfg, Upstream(), "client-" + "y" * 32)) as client:
+                for count in (5000, 15000):
+                    original = '\"x\"\n' * count
+                    with patch("narrow._layers", return_value=original):
+                        offset, chunks = 0, []
+                        while True:
+                            result = await client.call_tool("roads_layers", {"offset": offset})
+                            self.assertIsNone(result.structured_content)
+                            text = result.content[0].text
+                            self.assertLessEqual(len(text), 24000)
+                            if len(original) <= 24000:
+                                chunks.append(text)
+                                break
+                            page = json.loads(text)
+                            chunks.append(page["text"])
+                            if page["next_offset"] is None:
+                                break
+                            self.assertGreater(page["next_offset"], offset)
+                            offset = page["next_offset"]
+                        self.assertEqual("".join(chunks), original)
+                        result = await client.call_tool("roads_query", {"sql": "select 1"})
+                        self.assertIsNone(result.structured_content)
 
     def test_separate_credentials_and_narrow_mode_required(self):
         cfg = dict(mode="narrow", name="roads", about="roads", skill="roads-sql")

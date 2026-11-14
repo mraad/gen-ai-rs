@@ -35,11 +35,11 @@ def build(cfg, upstream, token, instructions=""):
             raise ToolError(text)
         return text
 
-    @mcp.tool(name=specs[0]["name"], description=specs[0]["description"])
+    @mcp.tool(name=specs[0]["name"], description=specs[0]["description"], output_schema=None)
     def layers(table: str | None = None, offset: int | None = None) -> str:
         return call(specs[0]["name"], {k: v for k, v in (("table", table), ("offset", offset)) if v is not None})
 
-    @mcp.tool(name=specs[1]["name"], description=specs[1]["description"])
+    @mcp.tool(name=specs[1]["name"], description=specs[1]["description"], output_schema=None)
     def query(sql: str | None = None, queries: list[dict] | None = None) -> str:
         fmt = get_http_headers().get("x-gait-format", "geojson")
         if fmt not in FORMATS:
