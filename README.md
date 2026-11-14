@@ -107,7 +107,7 @@ The config is the existing narrow-mode gateway config; its `mcp.tokenEnv` names 
 
 Artifact downloads require façade authentication and are limited to its last 1,000 returned paths; restarting the façade clears that list. The underlying executor still owns expiration. SQL runs finish or hit their execution timeout even if the façade client disconnects. This service is additional; existing dataset MCP registrations remain intact.
 
-Catalog cards use the model's `source` minus `ARCGIS.source_prefix` for SQL names, while Markdown pages follow the exporter’s validated display-name filename convention. Display labels are not SQL identifiers. Catalogs over 24,000 characters return an index; large concept pages return compact model facts so the executor and harness do not truncate them.
+Catalog cards use the model's `source` minus `ARCGIS.source_prefix` for SQL names, while Markdown pages follow the exporter’s validated display-name filename convention. Display labels are not SQL identifiers. Catalogs over 24,000 characters return an index; large concept pages return compact model facts so the executor and harness do not truncate them. If still oversized, results return lossless text fragments: call again with `offset=next_offset` and the same table until `next_offset` is null.
 
 ## Host API
 
@@ -176,7 +176,7 @@ metadata:
 
 Eight skills may be active. Instruction bodies are limited to 16,000 characters; resources are truncated to that length. Names must match their catalog keys and use 1 to 128 ASCII letters, numbers, dots, underscores, or hyphens (the tool-name rule), and resources stay inside the skill folder. Only UTF-8 files under `references/`, `assets/`, and `resources/` are exported. Symlinks, scripts, and `mcp.json` are excluded. Removed skill folders are removed from the generated bundle. Instruction bodies use plain text; template rendering was removed.
 
-Activations survive later turns and session replay. Active skill blocks retain the listed resource paths so they remain available after tool history is discarded. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
+Activations survive later turns and session replay. Active skill blocks retain the listed resource paths as a JSON array so they remain available after tool history is discarded. A changed content hash invalidates the old activation. Only eight instruction bodies are cached in memory.
 
 ## State and events
 

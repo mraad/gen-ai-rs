@@ -177,7 +177,7 @@ fn skills_load_progressively_and_stay_active_without_tool_history() {
     assert!(model.requests.borrow()[0].messages[0]
         .text()
         .unwrap()
-        .contains("Resources: references/factors.md"));
+        .contains(r#"Resources (JSON paths): ["references/factors.md"]"#));
     assert_eq!(
         http.reads
             .borrow()
@@ -530,4 +530,25 @@ fn page_tools_run_for_one_turn_and_clashing_names_are_skipped() {
         .tools
         .iter()
         .all(|t| t["function"]["name"] != "page_draft"));
+}
+
+#[test]
+fn active_skill_resource_paths_round_trip_as_json() {
+    let paths = json!(["references/a, b.md", "references/a&b.md"]);
+    let mut manifest = catalog();
+    manifest["skills"]["units"]["resources"] = paths.clone();
+    let model = Model::new(vec![
+        asks("activate_skill", json!({"name":"units"})),
+        says("done"),
+    ]);
+    let agent = agent(model.clone(), files(manifest), vec![]);
+    block_on(agent.run("activate", &ctx())).unwrap();
+    let requests = model.requests.borrow();
+    let line = requests[1].messages[0]
+        .text()
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Resources (JSON paths): "))
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(line).unwrap(), paths);
 }

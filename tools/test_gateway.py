@@ -117,6 +117,16 @@ class Gateway(unittest.TestCase):
         self.assertEqual(FakeUpstream.calls, [])
         self.assertIn("error", self.call("other_query", {"sql": "SELECT 1"}))  # another dataset's tool is unknown
 
+    def test_catalog_continuation_reaches_runner(self):
+        self.start("narrow")
+        self.call("demo_layers", {"offset": 8000})
+        self.assertEqual(FakeUpstream.calls[-1][1]["args"], ["layers", "/db/knowledge", "", "8000"])
+        for offset in (-1, True, "8000"):
+            before = len(FakeUpstream.calls)
+            result = self.call("demo_layers", {"offset": offset})
+            self.assertTrue(result["result"]["isError"])
+            self.assertEqual(len(FakeUpstream.calls), before)
+
     def call_list(self):
         return json.loads(self.post("tools/list", {})[2])
 

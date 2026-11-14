@@ -36,8 +36,8 @@ def build(cfg, upstream, token, instructions=""):
         return text
 
     @mcp.tool(name=specs[0]["name"], description=specs[0]["description"])
-    def layers(table: str | None = None) -> str:
-        return call(specs[0]["name"], {} if table is None else {"table": table})
+    def layers(table: str | None = None, offset: int | None = None) -> str:
+        return call(specs[0]["name"], {k: v for k, v in (("table", table), ("offset", offset)) if v is not None})
 
     @mcp.tool(name=specs[1]["name"], description=specs[1]["description"])
     def query(sql: str | None = None, queries: list[dict] | None = None) -> str:

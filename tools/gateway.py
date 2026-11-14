@@ -48,8 +48,8 @@ def narrow_tools(cfg):
     """The two narrow tools. Their names and text come from the config, so one gateway serves any DuckDB dataset."""
     name, about, skill = cfg["name"], cfg["about"], cfg["skill"]
     return [
-        {"name": f"{name}_layers", "description": f"With no table: a compact card for every {about} table (geometry type and SRID, key, row count, valid time, and each column with its type, unit, rules and example values), and the joins between tables. With a table: its catalog page, or compact model facts when the page is large. Read the cards once before you write SQL. Large catalogs return a table index; request relevant tables for their columns. Rules: skill {skill}.",
-         "inputSchema": {"type": "object", "properties": {"table": {"type": "string", "description": "Table name. Leave out to list all tables."}}, "additionalProperties": False}},
+        {"name": f"{name}_layers", "description": f"With no table: a compact card for every {about} table (geometry type and SRID, key, row count, valid time, and each column with its type, unit, rules and example values), and the joins between tables. With a table: its catalog page, or compact model facts when the page is large. Read the cards once before you write SQL. Large catalogs return a table index; request relevant tables for their columns. If next_offset is returned, call again with that offset and the same table. Rules: skill {skill}.",
+         "inputSchema": {"type": "object", "properties": {"table": {"type": "string", "description": "Table name. Leave out to list all tables."}, "offset": {"type": "integer", "minimum": 0, "description": "Continue a large result at next_offset."}}, "additionalProperties": False}},
         {"name": f"{name}_query", "description": f"Run read-only DuckDB SELECTs on the {about} tables (spatial extension loaded, WGS84 degrees, axis order x=longitude). Give one `sql`, or `queries` for several named layers on one map. A result with no GEOMETRY column returns up to 200 rows (50 per query with `queries`). A result with a GEOMETRY column returns row_count, stats and 10 sample rows, and its full data is one file at the returned url, GeoJSON or GeoParquet as the map page asks, which the map draws. Rules: skill {skill}.",
          "inputSchema": {"type": "object", "properties": {
              "sql": {"type": "string", "maxLength": SQL_LIMIT},
@@ -128,9 +128,13 @@ def text_result(text, error=False):
 def narrow_call(up, cfg, name, args, fmt="geojson", on_artifacts=None):
     """Run a fixed script upstream. Arguments are validated here; the model never chooses a path."""
     if name == f"{cfg['name']}_layers":
-        if set(args) - {"table"} or not isinstance(args.get("table", ""), str):
-            raise ValueError("only an optional string table is allowed")
+        if set(args) - {"table", "offset"} or not isinstance(args.get("table", ""), str):
+            raise ValueError("only table and offset are allowed; table must be a string")
         script_args = ["layers", cfg["okf"], *([args["table"]] if args.get("table") else [])]
+        if "offset" in args:
+            if type(args["offset"]) is not int or args["offset"] < 0:
+                raise ValueError("offset must be a non-negative integer")
+            script_args = ["layers", cfg["okf"], args.get("table", ""), str(args["offset"])]
     else:
         queries = [{"name": "result", "sql": args["sql"]}] if set(args) == {"sql"} else args.get("queries") if set(args) == {"queries"} else None
         if not isinstance(queries, list) or not 1 <= len(queries) <= MAX_QUERIES:

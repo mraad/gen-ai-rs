@@ -103,10 +103,10 @@ impl SkillSet {
         for entry in self.active(pad) {
             let skill = &self.kb.skills[entry["name"].as_str().unwrap_or_default()];
             out.push_str(&format!(
-                "\n<skill_content name=\"{}\">\n{}\nResources: {}\n</skill_content>",
+                "\n<skill_content name=\"{}\">\n{}\nResources (JSON paths): {}\n</skill_content>",
                 skill.name,
                 self.body(skill).await?,
-                escape(&skill.resources.join(", "))
+                serde_json::to_string(&skill.resources)?
             ));
         }
         Ok(out)
@@ -138,7 +138,7 @@ impl SkillSet {
                         if !is_active && active.len() >= 8 { return Err(Error::Tool("at most 8 skills can be active".into())); }
                         set.body(skill).await?;
                         if !is_active { active.push(json!({"name": name, "hash": skill.hash})); pad.set(ACTIVE, active); }
-                        return Ok(format!("Skill '{name}' is active. Resources: {}", skill.resources.join(", ")));
+                        return Ok(format!("Skill '{name}' is active. Resources (JSON paths): {}", serde_json::to_string(&skill.resources)?));
                     }
                     let path = args["path"].as_str().unwrap_or_default();
                     if !is_active || !skill.resources.iter().any(|p| p == path) {

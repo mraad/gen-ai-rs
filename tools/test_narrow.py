@@ -60,6 +60,54 @@ class Narrow(unittest.TestCase):
         (okf / "Wells.md").write_text("outside datasets/")
         return okf
 
+    def collect_pages(self, okf, table=None):
+        chunks, offset = [], 0
+        while True:
+            page = narrow.layers(okf, table, offset)
+            self.assertLessEqual(len(json.dumps(page)), 24000)
+            chunks.append(page["text"])
+            if page["next_offset"] is None:
+                return json.loads("".join(chunks))
+            self.assertGreater(page["next_offset"], offset)
+            offset = page["next_offset"]
+
+    def test_many_tables_and_relationships_remain_discoverable(self):
+        okf = self.bundle()
+        path = okf / "Demo.ossie.json"
+        model = json.loads(path.read_text())
+        template = model["datasets"][0]
+        model["datasets"] = [{**template, "name": f"Table_{i}", "description": "x" * 200} for i in range(300)]
+        path.write_text(json.dumps(model))
+        result = self.collect_pages(okf)
+        self.assertEqual([t["table_name"] for t in result["tables"]], [f"Table_{i}" for i in range(300)])
+        self.assertEqual(len(result["relationships"]), 3)
+
+    def test_long_model_facts_and_large_page_are_lossless(self):
+        okf = self.bundle()
+        path = okf / "Demo.ossie.json"
+        model = json.loads(path.read_text())
+        description = "long \"quoted\" description " * 3000
+        model["datasets"][0]["description"] = description
+        path.write_text(json.dumps(model))
+        (okf / "datasets/Wells.md").write_text("prose " * 5000)
+        result = self.collect_pages(okf, "Wells")
+        self.assertEqual(result["about"], description)
+        self.assertTrue(any(c.startswith("OBJECTID ") for c in result["columns"]))
+
+    def test_validation_resolves_qualified_and_case_insensitive_names(self):
+        okf = self.bundle()
+        path = okf / "Demo.ossie.json"
+        model = json.loads(path.read_text())
+        model["datasets"] = model["datasets"][:1]
+        for source in ("main.Wells", "wells"):
+            model["datasets"][0]["source"] = source
+            path.write_text(json.dumps(model))
+            self.assertEqual(narrow.validate(self.db, okf), {"tables": 1})
+        model["datasets"][0]["source"] = "main.missing"
+        path.write_text(json.dumps(model))
+        with self.assertRaisesRegex(ValueError, "missing from database"):
+            narrow.validate(self.db, okf)
+
     def test_large_catalog_is_an_index_not_truncated_json(self):
         okf = self.bundle()
         path = okf / "Demo.ossie.json"

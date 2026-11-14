@@ -104,7 +104,7 @@ def relationship(r):
     return f"{r['name']}: {' and '.join(joins)}" + (f" | {note}" if note else "")
 
 
-def layers(okf, table=None):
+def _layers(okf, table=None):
     """The OKF bundle in folder okf: with no table, cards from its Ossie model; with a table, its Markdown page."""
     models = sorted(Path(okf).glob("*.ossie.json"))
     if len(models) != 1:
@@ -156,6 +156,28 @@ def layers(okf, table=None):
         item["detail"] = "Large concept page: compact model facts, without generated prose."
         return item
     return page
+
+
+def layers(okf, table=None, offset=0):
+    """Large results are lossless text pages; continue with next_offset and the same table."""
+    offset = int(offset)
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    value = _layers(okf, table or None)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if len(text) <= 24_000 and offset == 0:
+        return value
+    if offset >= len(text):
+        raise ValueError("offset is outside the catalog result")
+    size = 8000
+    while True:
+        end = min(offset + size, len(text))
+        page = {"text": text[offset:end], "offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "detail": "Text fragment; continue with next_offset and the same table. Concatenate text to recover the full result."}
+        if len(json.dumps(page)) <= 24_000:
+            return page
+        size //= 2
 
 
 
@@ -254,13 +276,15 @@ def query(database, queries, fmt="geojson"):
 def validate(database, okf):
     """Fail startup when the catalog, database, and concept pages disagree."""
     import duckdb
-    catalog = layers(okf)
+    catalog = _layers(okf)
     with duckdb.connect(database, read_only=True) as con:
-        available = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
         for item in catalog["tables"]:
             table = item["table_name"]
-            if table not in available:
-                raise ValueError(f"OKF table missing from database: {table}")
+            reference = ".".join(quote(part) for part in table.split("."))
+            try:
+                con.execute(f"SELECT * FROM {reference} LIMIT 0")
+            except duckdb.Error as error:
+                raise ValueError(f"OKF table missing from database: {table}") from error
             layers(okf, table)
     return {"tables": len(catalog["tables"])}
 
@@ -273,4 +297,4 @@ if __name__ == "__main__":
         sys.exit(f"usage error: {error!r}")
     except Exception as error:  # noqa: BLE001 - DuckDB errors go back to the model as text
         sys.exit(f"{type(error).__name__}: {error}")
-    print(result if isinstance(result, str) else json.dumps(result, default=str, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow
+    print(result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow

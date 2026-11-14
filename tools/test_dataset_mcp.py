@@ -22,10 +22,11 @@ class DatasetMcp(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp) as client:
                 self.assertEqual({t.name for t in await client.list_tools()}, {"roads_layers", "roads_query"})
                 await client.call_tool("roads_layers", {})
+                await client.call_tool("roads_layers", {"offset": 8000})
                 await client.call_tool("roads_query", {"sql": "select 1"})
                 with self.assertRaises(ToolError):
                     await client.call_tool("execute", {"target": "echo no"})
-            self.assertEqual(calls, [("roads_layers", {}, "geojson"), ("roads_query", {"sql": "select 1"}, "geojson")])
+            self.assertEqual(calls, [("roads_layers", {}, "geojson"), ("roads_layers", {"offset": 8000}, "geojson"), ("roads_query", {"sql": "select 1"}, "geojson")])
 
     def test_separate_credentials_and_narrow_mode_required(self):
         cfg = dict(mode="narrow", name="roads", about="roads", skill="roads-sql")
