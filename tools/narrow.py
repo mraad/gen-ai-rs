@@ -104,22 +104,81 @@ def relationship(r):
     return f"{r['name']}: {' and '.join(joins)}" + (f" | {note}" if note else "")
 
 
-def layers(okf, table=None):
+def _layers(okf, table=None):
     """The OKF bundle in folder okf: with no table, cards from its Ossie model; with a table, its Markdown page."""
     models = sorted(Path(okf).glob("*.ossie.json"))
     if len(models) != 1:
         raise SystemExit(f"the OKF folder needs exactly one *.ossie.json, found {len(models)}")
     model = json.loads(models[0].read_text(encoding="utf-8"))
+    prefix = extension(model, "ARCGIS").get("source_prefix")
+    datasets = []
+    seen_tables, seen_pages = set(), set()
+    for dataset in model["datasets"]:
+        if extension(dataset, "ARCGIS").get("view") is False:
+            continue
+        source = dataset.get("source", dataset["name"])
+        sql_name = source.removeprefix(f"{prefix}.") if prefix else source
+        stem = dataset["name"].replace(" ", "_")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stem):
+            raise ValueError(f"invalid OKF concept name: {dataset['name']}")
+        if sql_name.casefold() in seen_tables or stem.casefold() in seen_pages:
+            raise ValueError("ambiguous OKF table or concept filename")
+        seen_tables.add(sql_name.casefold())
+        seen_pages.add(stem.casefold())
+        datasets.append((dataset, sql_name, stem))
     if table is None:
-        out = {"legend": CARD_LEGEND, "tables": [card(d) for d in model["datasets"]]}
+        cards = []
+        for dataset, sql_name, _ in datasets:
+            item = card(dataset)
+            item["table_name"] = sql_name
+            if sql_name != dataset["name"]:
+                item["name"] = dataset["name"]
+            cards.append(item)
+        out = {"legend": CARD_LEGEND, "tables": cards}
         if model.get("relationships"):
             out["relationships"] = [relationship(r) for r in model["relationships"]]
+        # Large catalogs must fit the executor output and the harness tool budget.
+        if len(json.dumps(out, ensure_ascii=False)) > 24_000:
+            for item in cards:
+                item.pop("columns")
+                item["about"] = item["about"][:160]
+            out["detail"] = "Large catalog: table index only. Request each relevant table for columns, codes and rules."
         return out
-    # The page path uses the model's own name, never the caller's text.
-    name = next((d["name"] for d in model["datasets"] if d["name"].lower() == table.lower()), None)
-    if name is None:
-        raise SystemExit(f"unknown table {table}; call without a table to list them")
-    return (Path(okf) / "datasets" / f"{name}.md").read_text(encoding="utf-8")
+    matches = [(d, stem) for d, sql_name, stem in datasets
+               if table.casefold() in (d["name"].casefold(), sql_name.casefold())]
+    if len(matches) != 1:
+        raise SystemExit(f"unknown or ambiguous table {table}; call without a table to list them")
+    page = (Path(okf) / "datasets" / f"{matches[0][1]}.md").read_text(encoding="utf-8")
+    if len(page) > 24_000:
+        item = card(matches[0][0])
+        item["columns"] = [column_card(f) for f in matches[0][0]["fields"] if f["datatype"] != "Geometry"]
+        item["table_name"] = next(sql_name for d, sql_name, _ in datasets if d is matches[0][0])
+        item["detail"] = "Large concept page: compact model facts, without generated prose."
+        return item
+    return page
+
+
+def layers(okf, table=None, offset=0):
+    """Large results are lossless text pages; continue with next_offset and the same table."""
+    offset = int(offset)
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    value = _layers(okf, table or None)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if len(text) <= 24_000 and offset == 0:
+        return value
+    if offset >= len(text):
+        raise ValueError("offset is outside the catalog result")
+    size = 8000
+    while True:
+        end = min(offset + size, len(text))
+        page = {"text": text[offset:end], "offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "detail": "Text fragment; continue with next_offset and the same table. Concatenate text to recover the full result."}
+        if len(json.dumps(page)) <= 24_000:
+            return page
+        size //= 2
+
 
 
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -214,12 +273,28 @@ def query(database, queries, fmt="geojson"):
         return {"layers": [run_one(con, art, q["name"], q["sql"], shown, fmt) for q in queries]}
 
 
+def validate(database, okf):
+    """Fail startup when the catalog, database, and concept pages disagree."""
+    import duckdb
+    catalog = _layers(okf)
+    with duckdb.connect(database, read_only=True) as con:
+        for item in catalog["tables"]:
+            table = item["table_name"]
+            reference = ".".join(quote(part) for part in table.split("."))
+            try:
+                con.execute(f"SELECT * FROM {reference} LIMIT 0")
+            except duckdb.Error as error:
+                raise ValueError(f"OKF table missing from database: {table}") from error
+            layers(okf, table)
+    return {"tables": len(catalog["tables"])}
+
+
 if __name__ == "__main__":
     try:
         command, *args = sys.argv[1:]
-        result = {"layers": layers, "query": query}[command](*args)
+        result = {"layers": layers, "query": query, "validate": validate}[command](*args)
     except (ValueError, KeyError, TypeError) as error:
         sys.exit(f"usage error: {error!r}")
     except Exception as error:  # noqa: BLE001 - DuckDB errors go back to the model as text
         sys.exit(f"{type(error).__name__}: {error}")
-    print(result if isinstance(result, str) else json.dumps(result, default=str, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow
+    print(result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False, separators=(",", ":")))  # compact: the gateway cannot reshape it, because files follow
